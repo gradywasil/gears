@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { makeGear, radiusOf } from './gear.ts'
+import { makeGear, radiusOf, tipRadiusOf } from './gear.ts'
 import { evaluatePlacement } from './placement.ts'
+import { meshedTheta } from './phase.ts'
 
 describe('placement evaluation', () => {
   it('snaps a nearby cursor to the exact mesh distance', () => {
@@ -55,5 +56,58 @@ describe('placement evaluation', () => {
     // Moving a away: b must not count a's current position as snap partner.
     const v = evaluatePlacement([a, b], 20, 400, 400, 'a')
     expect(v.partner?.id).not.toBe('a')
+  })
+
+  it('refuses tip overlap: pitch-apart but teeth interpenetrating (user-reported bug)', () => {
+    // A(20t) at origin, B(20t) meshed to its right. A 10t dropped so it snaps
+    // to A at an angle placing it 100.5px from B — pitch-sum is 96 ("apart")
+    // but tip-sum is 102, so the teeth would physically cross.
+    const a = makeGear('a', 20, 0, 0)
+    const b = makeGear('b', 20, radiusOf(20) * 2, 0)
+    const theta = Math.acos((22500 - 100.5 * 100.5) / 21600) // dB = 100.5
+    const cursor = { x: 95 * Math.cos(theta), y: 95 * Math.sin(theta) }
+    const v = evaluatePlacement([a, b], 10, cursor.x, cursor.y)
+    expect(v.partner?.id).toBe('a')
+    expect(Math.hypot(v.x - b.x, v.y - b.y)).toBeCloseTo(100.5, 3)
+    expect(Math.hypot(v.x - b.x, v.y - b.y)).toBeLessThan(tipRadiusOf(10) + tipRadiusOf(20))
+    expect(v.valid).toBe(false)
+    expect(v.reason).toBe('overlap')
+  })
+
+  it('refuses multi-mesh when a secondary partner phase-clashes (user-reported bug)', () => {
+    // Two independent 20t gears; a 42t would mesh both at once, but their
+    // angles are arbitrary — the required simultaneous interlock is impossible.
+    const a = makeGear('a', 20, 0, 0)
+    const b = makeGear('b', 20, 240, 0)
+    const d = radiusOf(42) + radiusOf(20) // 186
+    const cx = 120
+    const cy = Math.sqrt(d * d - 120 * 120)
+    const angles = new Map([
+      ['a', 0],
+      ['b', 1.0], // arbitrary phase
+    ])
+    const v = evaluatePlacement([a, b], 42, cx, cy, undefined, angles)
+    expect(v.partners).toHaveLength(2)
+    expect(v.valid).toBe(false)
+    expect(v.reason).toBe('phase')
+  })
+
+  it('accepts multi-mesh when the secondary partner phase lines up', () => {
+    const a = makeGear('a', 20, 0, 0)
+    const b = makeGear('b', 20, 240, 0)
+    const d = radiusOf(42) + radiusOf(20)
+    const cx = 120
+    const cy = Math.sqrt(d * d - 120 * 120)
+    const candidate = makeGear('c', 42, cx, cy)
+    const thetaC = meshedTheta(0, a, candidate)
+    const thetaB = meshedTheta(thetaC, candidate, b)
+    const angles = new Map([
+      ['a', 0],
+      ['b', thetaB],
+    ])
+    const v = evaluatePlacement([a, b], 42, cx, cy, undefined, angles)
+    expect(v.partners).toHaveLength(2)
+    expect(v.valid).toBe(true)
+    expect(v.reason).toBe('ok')
   })
 })

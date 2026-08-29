@@ -80,6 +80,7 @@ export function MachineCanvas(props: MachineProps) {
         pos.x,
         pos.y,
         drag.kind === 'move' ? drag.id : undefined,
+        rotation,
       )
       const sprite = gearSprite(drag.teeth, dpr)
       const half = sprite.width / (2 * dpr)
@@ -254,6 +255,7 @@ export function MachineCanvas(props: MachineProps) {
         x,
         y,
         drag.kind === 'move' ? drag.id : undefined,
+        rotation,
       )
       if (verdict.valid) {
         if (drag.kind === 'new') onPlace(drag.teeth, verdict.x, verdict.y, verdict.partner?.id ?? null)

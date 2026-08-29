@@ -60,6 +60,7 @@ export function App() {
         gear.x + nudge[0] * step,
         gear.y + nudge[1] * step,
         gear.id,
+        new Map(Object.entries(state.angles)),
       )
       if (verdict.valid) {
         dispatch({

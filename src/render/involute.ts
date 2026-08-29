@@ -9,14 +9,12 @@
  * rotation 0 has a tooth center pointing along local angle 0 (+x).
  */
 
-import { radiusOf } from '../sim/gear.ts'
+import { radiusOf, tipRadiusOf } from '../sim/gear.ts'
 
 const PRESSURE_ANGLE = (20 * Math.PI) / 180
 const MODULE = 6
 
-export function gearOuterRadius(teeth: number): number {
-  return radiusOf(teeth) + MODULE
-}
+export const gearOuterRadius = tipRadiusOf
 
 type Pt = { x: number; y: number }
 

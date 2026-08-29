@@ -21,6 +21,11 @@ export function radiusOf(teeth: number): number {
   return (MODULE * teeth) / 2
 }
 
+/** Tip (outer) radius: teeth extend one addendum beyond the pitch circle. */
+export function tipRadiusOf(teeth: number): number {
+  return radiusOf(teeth) + MODULE
+}
+
 export function makeGear(id: string, teeth: number, x: number, y: number): Gear {
   if (!Number.isInteger(teeth) || teeth < 6 || teeth > 200) {
     throw new Error(`teeth out of range: ${teeth}`)
