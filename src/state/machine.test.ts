@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import { makeGear, radiusOf } from '../sim/gear.ts'
-import { initialMachineState, machineReducer } from './machine.ts'
+import { alignedAngles, initialMachineState, machineReducer } from './machine.ts'
 import { solveTrain } from '../sim/kinematics.ts'
 import { meshInvariantError } from '../sim/phase.ts'
-import { meshRelation } from '../sim/mesh.ts'
+import { meshRelation, meshedPairs } from '../sim/mesh.ts'
 
 function place(state: MachineStateish, teeth: number, x: number, y: number, partnerId: string | null) {
   const gear = makeGear(`g${teeth}@${x},${y}`, teeth, x, y)
@@ -98,5 +98,43 @@ describe('machine state', () => {
     expect(s.rpm).toBe(120)
     s = machineReducer(s, { type: 'setRpm', value: 1 })
     expect(s.rpm).toBe(5)
+  })
+
+  it('hydrate realigns every mesh in the restored train (save round-trip)', () => {
+    // Build a three-gear train, "persist" it, hydrate into a fresh state.
+    let s = initialMachineState()
+    s = place(s, 24, 100, 100, null)
+    const driveId = s.gears[0]!.id
+    s = place(s, 10, 100 + radiusOf(24) + radiusOf(10), 100, driveId)
+    s = place(s, 42, 100, 100 + radiusOf(24) + radiusOf(42), driveId)
+
+    const fresh = machineReducer(initialMachineState(), {
+      type: 'hydrate',
+      gears: s.gears,
+      driveId: s.driveId,
+      rpm: s.rpm,
+      running: true,
+    })
+
+    // Every meshing pair must interlock in the restored angles.
+    for (const [a, b] of meshedPairs(fresh.gears)) {
+      const err = meshInvariantError(
+        fresh.angles[a.id] ?? 0,
+        a,
+        fresh.angles[b.id] ?? 0,
+        b,
+      )
+      expect(err).toBeLessThan(1e-9)
+    }
+    expect(meshedPairs(fresh.gears)).toHaveLength(2)
+  })
+
+  it('alignedAngles leaves disconnected gears at zero', () => {
+    const angles = alignedAngles(
+      [makeGear('a', 10, 0, 0), makeGear('lonely', 20, 900, 900)],
+      'a',
+    )
+    expect(angles['a']).toBe(0)
+    expect(angles['lonely']).toBe(0)
   })
 })

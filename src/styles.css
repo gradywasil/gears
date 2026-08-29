@@ -313,6 +313,98 @@ input[type='range'] {
   border-color: var(--danger);
 }
 
+/* --- Saves panel --------------------------------------------------------------- */
+
+.top-bar-actions {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.saves-panel {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  width: 380px;
+  max-width: calc(100vw - 120px);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 14px 16px;
+  z-index: 5;
+}
+
+.saves-panel header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.saves-panel h2 {
+  margin: 0;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.saves-panel ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.saves-panel li {
+  display: grid;
+  grid-template-columns: 1fr auto auto auto auto;
+  align-items: center;
+  gap: 6px;
+}
+
+.saves-panel input[type='text'] {
+  padding: 4px 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-2);
+  color: var(--ink);
+  font-size: 0.78rem;
+  min-width: 0;
+}
+
+.saves-panel input[type='text']::placeholder {
+  color: var(--ink-2);
+}
+
+.slot-date {
+  font-size: 0.68rem;
+  color: var(--ink-2);
+  font-variant-numeric: tabular-nums;
+  min-width: 6ch;
+  text-align: right;
+}
+
+.saves-panel button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* --- Toast --------------------------------------------------------------------- */
+
+.toast {
+  position: absolute;
+  bottom: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--ink);
+  color: var(--panel);
+  border-radius: 999px;
+  padding: 8px 18px;
+  font-size: 0.82rem;
+  box-shadow: var(--shadow);
+}
+
 /* --- Overlays ----------------------------------------------------------------- */
 
 .first-run {
