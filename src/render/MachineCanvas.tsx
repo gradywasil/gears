@@ -1,46 +1,61 @@
 import { useEffect, useRef } from 'react'
 import type { Gear } from '../sim/gear.ts'
+import { gearOuterRadius } from './involute.ts'
 import type { Spin } from '../sim/kinematics.ts'
+import { evaluatePlacement, type PlacementVerdict } from '../sim/placement.ts'
 import { gearSprite } from './spriteCache.ts'
+
+export type DragState =
+  | { kind: 'new'; teeth: number }
+  | { kind: 'move'; id: string; teeth: number }
+  | null
 
 export type MachineProps = {
   gears: readonly Gear[]
-  /** Only gears present here spin; absent gears are stationary. */
   spins: ReadonlyMap<string, Spin>
-  /** Initial rotation per gear (radians, tooth-center-at-angle-0 convention). */
-  angles: ReadonlyMap<string, number>
+  angles: Readonly<Record<string, number>>
+  anglesVersion: number
   running: boolean
+  driveId: string | null
+  selectedId: string | null
+  drag: DragState
+  accent: string
+  danger: string
+  onPlace: (teeth: number, x: number, y: number, partnerId: string | null) => void
+  onMove: (id: string, x: number, y: number, partnerId: string | null) => void
+  onSelect: (id: string | null) => void
+  onStartMove: (id: string, teeth: number) => void
+  onDragEnd: () => void
 }
+
+const REFUSE_MS = 300
 
 /**
  * The machine canvas. The rAF loop lives outside React (R2): React renders the
- * chrome, this component owns the frame. Rotation advances by dt each frame so
- * animation is frame-rate independent.
+ * chrome; this component owns the frame, the drag ghost, and refusal feedback.
+ * Sim units are canvas CSS pixels (the DPR scaling is baked into the transform).
  */
-export function MachineCanvas({ gears, spins, angles, running }: MachineProps) {
+export function MachineCanvas(props: MachineProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
-  const stateRef = useRef({ gears, spins, angles: new Map(angles), running })
-
+  const propsRef = useRef(props)
   useEffect(() => {
-    stateRef.current.gears = gears
-    stateRef.current.spins = spins
-    stateRef.current.running = running
-  }, [gears, spins, running])
+    propsRef.current = props
+  })
+
+  const dragPosRef = useRef<{ x: number; y: number; inside: boolean } | null>(null)
+  const shakeRef = useRef<{ x: number; y: number; teeth: number; until: number } | null>(null)
 
   useEffect(() => {
     const canvas = canvasRef.current!
     const ctx = canvas.getContext('2d')!
-    const rotation = new Map(angles)
+    const rotation = new Map<string, number>()
     let dpr = 0
     let cssW = 0
     let cssH = 0
 
     const resize = () => {
-      const next = Math.min(window.devicePixelRatio || 1, 2)
+      dpr = Math.min(window.devicePixelRatio || 1, 2)
       const rect = canvas.getBoundingClientRect()
-      if (next !== dpr) {
-        dpr = next
-      }
       cssW = rect.width
       cssH = rect.height
       canvas.width = Math.max(1, Math.round(cssW * dpr))
@@ -52,15 +67,62 @@ export function MachineCanvas({ gears, spins, angles, running }: MachineProps) {
 
     let last = performance.now()
     let frame = 0
+    let syncedVersion = -1
+
+    const drawGhost = () => {
+      const { gears, drag, accent, danger } = propsRef.current
+      const pos = dragPosRef.current
+      if (!drag || !pos || !pos.inside) return
+
+      const verdict: PlacementVerdict = evaluatePlacement(
+        gears,
+        drag.teeth,
+        pos.x,
+        pos.y,
+        drag.kind === 'move' ? drag.id : undefined,
+      )
+      const sprite = gearSprite(drag.teeth, dpr)
+      const half = sprite.width / (2 * dpr)
+
+      ctx.save()
+      ctx.globalAlpha = 0.5
+      ctx.translate(verdict.x, verdict.y)
+      ctx.drawImage(sprite, -half, -half, half * 2, half * 2)
+      ctx.restore()
+
+      // Verdict ring around the ghost; partner gets a highlight ring.
+      ctx.save()
+      ctx.lineWidth = 2
+      ctx.setLineDash([6, 5])
+      ctx.strokeStyle = verdict.valid ? accent : danger
+      ctx.beginPath()
+      ctx.arc(verdict.x, verdict.y, gearOuterRadius(drag.teeth) + 5, 0, 2 * Math.PI)
+      ctx.stroke()
+      if (verdict.partner && verdict.valid) {
+        ctx.setLineDash([])
+        ctx.lineWidth = 2.5
+        ctx.strokeStyle = accent
+        ctx.beginPath()
+        ctx.arc(verdict.partner.x, verdict.partner.y, gearOuterRadius(verdict.partner.teeth) + 5, 0, 2 * Math.PI)
+        ctx.stroke()
+      }
+      ctx.restore()
+    }
 
     const draw = (now: number) => {
       const dt = Math.min((now - last) / 1000, 0.05)
       last = now
-      const { gears: gs, spins: sp, running: run } = stateRef.current
+      const { gears, spins, running, driveId, selectedId, angles, anglesVersion, accent } =
+        propsRef.current
 
-      if (run) {
-        for (const gear of gs) {
-          const spin = sp.get(gear.id)
+      if (syncedVersion !== anglesVersion) {
+        for (const [id, a] of Object.entries(angles)) rotation.set(id, a)
+        syncedVersion = anglesVersion
+      }
+
+      if (running) {
+        for (const gear of gears) {
+          const spin = spins.get(gear.id)
           if (!spin) continue
           const omega = ((spin.rpm * 2 * Math.PI) / 60) * spin.direction
           rotation.set(gear.id, (rotation.get(gear.id) ?? 0) + omega * dt)
@@ -69,7 +131,10 @@ export function MachineCanvas({ gears, spins, angles, running }: MachineProps) {
 
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
       ctx.clearRect(0, 0, cssW, cssH)
-      for (const gear of gs) {
+
+      const movingId = propsRef.current.drag?.kind === 'move' ? propsRef.current.drag.id : null
+      for (const gear of gears) {
+        if (gear.id === movingId) continue // hidden while being dragged
         const sprite = gearSprite(gear.teeth, dpr)
         const half = sprite.width / (2 * dpr)
         ctx.save()
@@ -77,16 +142,142 @@ export function MachineCanvas({ gears, spins, angles, running }: MachineProps) {
         ctx.rotate(rotation.get(gear.id) ?? 0)
         ctx.drawImage(sprite, -half, -half, half * 2, half * 2)
         ctx.restore()
+
+        if (gear.id === driveId) {
+          ctx.save()
+          ctx.strokeStyle = accent
+          ctx.lineWidth = 2.5
+          ctx.beginPath()
+          ctx.arc(gear.x, gear.y, gearOuterRadius(gear.teeth) + 4, 0, 2 * Math.PI)
+          ctx.stroke()
+          ctx.restore()
+        }
+        if (gear.id === selectedId) {
+          ctx.save()
+          ctx.strokeStyle = accent
+          ctx.lineWidth = 1.5
+          ctx.setLineDash([4, 4])
+          ctx.beginPath()
+          ctx.arc(gear.x, gear.y, gearOuterRadius(gear.teeth) + 10, 0, 2 * Math.PI)
+          ctx.stroke()
+          ctx.restore()
+        }
+      }
+
+      drawGhost()
+
+      // Refusal feedback: a brief shake at the refused spot.
+      const shake = shakeRef.current
+      if (shake) {
+        if (now >= shake.until) {
+          shakeRef.current = null
+        } else {
+          const t = (shake.until - now) / REFUSE_MS
+          const offset = Math.sin(now * 0.09) * 4 * t
+          const sprite = gearSprite(shake.teeth, dpr)
+          const half = sprite.width / (2 * dpr)
+          ctx.save()
+          ctx.globalAlpha = 0.4
+          ctx.translate(shake.x + offset, shake.y)
+          ctx.drawImage(sprite, -half, -half, half * 2, half * 2)
+          ctx.restore()
+          ctx.save()
+          ctx.strokeStyle = propsRef.current.danger
+          ctx.lineWidth = 2
+          ctx.setLineDash([6, 5])
+          ctx.beginPath()
+          ctx.arc(shake.x + offset, shake.y, gearOuterRadius(shake.teeth) + 5, 0, 2 * Math.PI)
+          ctx.stroke()
+          ctx.restore()
+        }
       }
       frame = requestAnimationFrame(draw)
     }
     frame = requestAnimationFrame(draw)
 
+    // --- Pointer interaction -------------------------------------------------
+    const toLocal = (e: PointerEvent) => {
+      const rect = canvas.getBoundingClientRect()
+      return { x: e.clientX - rect.left, y: e.clientY - rect.top }
+    }
+
+    const hitTest = (x: number, y: number): Gear | null => {
+      const { gears } = propsRef.current
+      for (let i = gears.length - 1; i >= 0; i--) {
+        const g = gears[i]!
+        if (Math.hypot(x - g.x, y - g.y) <= gearOuterRadius(g.teeth)) return g
+      }
+      return null
+    }
+
+    let pendingMove: { id: string; teeth: number; x: number; y: number } | null = null
+
+    const onPointerDown = (e: PointerEvent) => {
+      const { drag, onSelect } = propsRef.current
+      if (drag) return // a tray drag is in flight; drops only
+      const { x, y } = toLocal(e)
+      const hit = hitTest(x, y)
+      onSelect(hit?.id ?? null)
+      if (hit) pendingMove = { id: hit.id, teeth: hit.teeth, x, y }
+    }
+
+    const onPointerMove = (e: PointerEvent) => {
+      const { x, y } = toLocal(e)
+      dragPosRef.current = { x, y, inside: true }
+      if (pendingMove && !propsRef.current.drag) {
+        if (Math.hypot(x - pendingMove.x, y - pendingMove.y) > 4) {
+          propsRef.current.onStartMove(pendingMove.id, pendingMove.teeth)
+          pendingMove = null
+        }
+      }
+      const canvasEl = canvasRef.current!
+      const hovering = hitTest(x, y)
+      canvasEl.style.cursor = propsRef.current.drag
+        ? 'grabbing'
+        : hovering
+          ? 'grab'
+          : 'default'
+    }
+
+    const onPointerLeave = () => {
+      if (dragPosRef.current) dragPosRef.current.inside = false
+    }
+
+    const onPointerUp = (e: PointerEvent) => {
+      const { drag, onPlace, onMove, onDragEnd } = propsRef.current
+      pendingMove = null
+      if (!drag) return
+      const { x, y } = toLocal(e)
+      const verdict = evaluatePlacement(
+        propsRef.current.gears,
+        drag.teeth,
+        x,
+        y,
+        drag.kind === 'move' ? drag.id : undefined,
+      )
+      if (verdict.valid) {
+        if (drag.kind === 'new') onPlace(drag.teeth, verdict.x, verdict.y, verdict.partner?.id ?? null)
+        else onMove(drag.id, verdict.x, verdict.y, verdict.partner?.id ?? null)
+      } else {
+        shakeRef.current = { x: verdict.x, y: verdict.y, teeth: drag.teeth, until: performance.now() + REFUSE_MS }
+      }
+      onDragEnd()
+      dragPosRef.current = null
+    }
+
+    canvas.addEventListener('pointerdown', onPointerDown)
+    canvas.addEventListener('pointermove', onPointerMove)
+    canvas.addEventListener('pointerleave', onPointerLeave)
+    canvas.addEventListener('pointerup', onPointerUp)
+
     return () => {
       cancelAnimationFrame(frame)
       observer.disconnect()
+      canvas.removeEventListener('pointerdown', onPointerDown)
+      canvas.removeEventListener('pointermove', onPointerMove)
+      canvas.removeEventListener('pointerleave', onPointerLeave)
+      canvas.removeEventListener('pointerup', onPointerUp)
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   return <canvas ref={canvasRef} className="machine-canvas" />

@@ -1,5 +1,21 @@
+/**
+ * Visual world: precise instrument lab (design brief, user-pinned).
+ * Warm paper bench, charcoal ink, hairline chrome, one signal accent.
+ */
+
 :root {
-  color-scheme: light dark;
+  --ground: #ece9e2;
+  --panel: #fbfaf7;
+  --panel-2: #f4f2ec;
+  --ink: #201d19;
+  --ink-2: #6e675c;
+  --line: #d8d3c8;
+  --line-strong: #b9b2a3;
+  --accent: #c63d0f;
+  --accent-soft: rgba(198, 61, 15, 0.12);
+  --danger: #b3261e;
+  --shadow: 0 1px 2px rgba(32, 29, 25, 0.08), 0 4px 14px rgba(32, 29, 25, 0.1);
+  --radius: 14px;
   font-family: ui-sans-serif, system-ui, sans-serif;
 }
 
@@ -7,21 +23,338 @@
   box-sizing: border-box;
 }
 
+html,
 body {
   margin: 0;
-  min-height: 100vh;
+  height: 100%;
 }
 
-#root {
-  min-height: 100vh;
+body {
+  background: var(--ground);
+  color: var(--ink);
+}
+
+::selection {
+  background: var(--accent-soft);
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.mono {
+  font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+.dim {
+  color: var(--ink-2);
+}
+
+#root,
+.app {
+  height: 100%;
   display: flex;
   flex-direction: column;
 }
 
-.machine-canvas {
+/* --- Top bar ---------------------------------------------------------------- */
+
+.top-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 18px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+}
+
+.top-bar h1 {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.controls {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.rpm-control {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.rpm-label {
+  font-size: 0.78rem;
+  color: var(--ink-2);
+}
+
+.rpm-value {
+  font-size: 0.82rem;
+  min-width: 5.5ch;
+  text-align: right;
+}
+
+input[type='range'] {
+  width: 180px;
+  accent-color: var(--accent);
+}
+
+/* --- Workbench layout ------------------------------------------------------- */
+
+.workbench {
   flex: 1;
+  display: flex;
+  min-height: 0;
+}
+
+.canvas-holder {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+}
+
+.machine-canvas {
   display: block;
   width: 100%;
-  min-height: 0;
+  height: 100%;
   touch-action: none;
+}
+
+/* --- Tray ------------------------------------------------------------------- */
+
+.tray {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 10px;
+  border-right: 1px solid var(--line);
+  background: var(--panel-2);
+  overflow-y: auto;
+}
+
+.tray-chip {
+  position: relative;
+  width: 60px;
+  height: 60px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel);
+  cursor: grab;
+  display: grid;
+  place-items: center;
+  transition: border-color 120ms ease-out, box-shadow 120ms ease-out;
+}
+
+.tray-chip:hover {
+  border-color: var(--line-strong);
+  box-shadow: var(--shadow);
+}
+
+.tray-chip:active {
+  cursor: grabbing;
+}
+
+.tray-chip canvas {
+  display: block;
+}
+
+.tray-chip-label {
+  position: absolute;
+  right: 4px;
+  bottom: 2px;
+  font-size: 0.62rem;
+  color: var(--ink-2);
+  font-variant-numeric: tabular-nums;
+}
+
+.tray[data-disabled] {
+  opacity: 0.6;
+}
+
+/* --- Inspector --------------------------------------------------------------- */
+
+.inspector {
+  position: absolute;
+  right: 18px;
+  bottom: 18px;
+  width: 240px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 14px 16px;
+}
+
+.inspector header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.inspector h2 {
+  margin: 0;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.inspector dl {
+  margin: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.inspector .stat {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 8px;
+}
+
+.inspector dt {
+  font-size: 0.78rem;
+  color: var(--ink-2);
+}
+
+.inspector dd {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.88rem;
+}
+
+.direction-mark {
+  color: var(--accent);
+}
+
+.inspector footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 12px;
+  gap: 8px;
+}
+
+.drive-badge {
+  display: inline-block;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 0.74rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+/* --- Buttons ----------------------------------------------------------------- */
+
+.icon-button {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: var(--panel);
+  color: var(--ink);
+  cursor: pointer;
+  transition: border-color 120ms ease-out, background 120ms ease-out;
+}
+
+.icon-button:hover {
+  border-color: var(--ink-2);
+}
+
+.run-button[aria-pressed='true'] {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.secondary-button {
+  padding: 5px 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: var(--panel);
+  color: var(--ink);
+  font-size: 0.78rem;
+  cursor: pointer;
+  transition: border-color 120ms ease-out, background 120ms ease-out;
+}
+
+.secondary-button:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.danger-button {
+  padding: 5px 12px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: none;
+  color: var(--danger);
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+
+.danger-button:hover {
+  border-color: var(--danger);
+}
+
+/* --- Overlays ----------------------------------------------------------------- */
+
+.first-run {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-content: center;
+  text-align: center;
+  pointer-events: none;
+  gap: 4px;
+}
+
+.first-run p {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.first-run .dim {
+  font-size: 0.84rem;
+}
+
+.drive-missing {
+  position: absolute;
+  top: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--panel);
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  box-shadow: var(--shadow);
+  padding: 8px 18px;
+  font-size: 0.84rem;
+}
+
+@media (max-width: 720px) {
+  .workbench {
+    flex-direction: column;
+  }
+
+  .tray {
+    flex-direction: row;
+    border-right: none;
+    border-bottom: 1px solid var(--line);
+  }
 }
