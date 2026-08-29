@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react'
+import { benchmarkSeed, startFpsMeter } from './dev/benchmark.ts'
 import { MachineCanvas, type DragState } from './render/MachineCanvas.tsx'
 import { makeGear } from './sim/gear.ts'
 import { solveTrain } from './sim/kinematics.ts'
@@ -203,6 +204,36 @@ export function App() {
   const onStartMove = useCallback((id: string, teeth: number) => setDrag({ kind: 'move', id, teeth }), [])
 
   const running = state.running
+
+  // Dev-only test hook (R4): state assertions for e2e without pixel scraping.
+  useEffect(() => {
+    if (!import.meta.env.DEV) return
+    ;(window as unknown as Record<string, unknown>).__gears = {
+      gears: () => state.gears,
+      driveId: () => state.driveId,
+      rpm: () => state.rpm,
+      running: () => running,
+      selectedId: () => state.selectedId,
+      angles: () => state.angles,
+      place: (teeth: number, x: number, y: number) =>
+        dispatch({ type: 'place', gear: makeGear(crypto.randomUUID(), teeth, x, y), partnerId: null }),
+    }
+  })
+
+  // Dev-only benchmark (T15): ?benchmark seeds a 23-gear train and reports fps.
+  useEffect(() => {
+    if (!import.meta.env.DEV) return
+    if (!window.location.search.includes('benchmark')) return
+    const seed = benchmarkSeed()
+    dispatch({
+      type: 'hydrate',
+      gears: seed,
+      driveId: seed[0]!.id,
+      rpm: 60,
+      running: true,
+    })
+    startFpsMeter()
+  }, [])
 
   return (
     <div className="app">
