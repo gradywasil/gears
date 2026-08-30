@@ -48,9 +48,10 @@ export function persistSoundPref(enabled: boolean) {
 
 /** Filter center for a mesh, from the smaller gear's tooth count. */
 export function meshPitchHz(minTeeth: number): number {
-  // 10 teeth ≈ 4.2 kHz (clockwork bright); 72 ≈ 900 Hz (heavy, slow).
+  // Tuned dark per user ear: 10 teeth ≈ 3 kHz (clockwork, not piercing);
+  // 72 ≈ 650 Hz (heavy machinery).
   const t = Math.min(72, Math.max(10, minTeeth))
-  return 4200 - ((t - 10) / 62) * 3300
+  return 3000 - ((t - 10) / 62) * 2350
 }
 
 type Voice = {
@@ -153,7 +154,7 @@ export class SoundEngine {
       }
       const t = ctx.currentTime
       const active = running ? m.gain * totalGain : 0
-      v.out.gain.setTargetAtTime(active * 0.5, t, 0.08)
+      v.out.gain.setTargetAtTime(active * 0.28, t, 0.08)
       v.modOsc.frequency.setTargetAtTime(Math.max(0.5, Math.min(400, m.toothHz)), t, 0.08)
       v.filter.frequency.setTargetAtTime(m.pitchHz, t, 0.08)
     }
@@ -161,12 +162,13 @@ export class SoundEngine {
 
   private meshesNow: ReadonlyMap<string, MeshVoice> | null = null
 
-  /** Drive hum: low tone tracking RPM; null clears it. */
+  /** Drive hum: low tone tracking RPM; null or a crawl clears it. */
   updateHum(rpm: number | null) {
     const ctx = this.ensureContext()
     if (!ctx || !this.master) return
-    if (rpm === null) {
-      if (this.humGain) this.humGain.gain.setTargetAtTime(0, ctx.currentTime, 0.1)
+    // Gated: below 15 RPM the machine is quiet — the hum fades in as it wakes.
+    if (rpm === null || rpm < 15) {
+      if (this.humGain) this.humGain.gain.setTargetAtTime(0, ctx.currentTime, 0.15)
       return
     }
     if (!this.humOsc) {
@@ -185,11 +187,11 @@ export class SoundEngine {
       this.humFilter = filter
     }
     const t = ctx.currentTime
-    // 5 RPM ≈ 34 Hz, 120 RPM ≈ 96 Hz — a motor that labors as you throttle up.
+    // 15 RPM ≈ 38 Hz, 120 RPM ≈ 96 Hz — a motor that labors as you throttle up.
     const freq = 30 + (rpm / 120) * 66
     this.humOsc.frequency.setTargetAtTime(freq, t, 0.1)
     this.humFilter!.frequency.setTargetAtTime(140 + (rpm / 120) * 220, t, 0.1)
-    this.humGain!.gain.setTargetAtTime(this.enabled ? 0.05 : 0, t, 0.1)
+    this.humGain!.gain.setTargetAtTime(this.enabled ? 0.022 : 0, t, 0.12)
   }
 
   private makeVoice(): Voice | null {
@@ -200,8 +202,8 @@ export class SoundEngine {
     noise.loop = true
     const filter = ctx.createBiquadFilter()
     filter.type = 'bandpass'
-    filter.frequency.value = 2400
-    filter.Q.value = 2.2
+    filter.frequency.value = 1500
+    filter.Q.value = 1.1 // low resonance: ticks read as machinery, not whistles
     const carrier = ctx.createGain()
     carrier.gain.value = 0.5
     const out = ctx.createGain()
