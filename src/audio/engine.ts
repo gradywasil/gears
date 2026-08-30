@@ -1,25 +1,27 @@
 /**
- * Synthesized machine sound (fast-follow #1). Zero audio assets: everything is
- * WebAudio graph — works offline, tunable at runtime.
+ * Synthesized machine sound (fast-follow #1; v2 after user ear-test).
+ * Zero audio assets: everything is WebAudio.
  *
- * Physics of the palette:
- * - Each MESH emits a tick train at the tooth-pass frequency. At a mesh of
- *   gears A and B, N_A·ω_A = N_B·ω_B (the rolling condition), so the rate is a
- *   property of the contact, not of either gear — one voice per mesh.
- *   A tick train is band-passed noise amplitude-modulated at that rate: slow
- *   rates read as discrete ticks, fast rates blend into a whir, exactly like
- *   real gearing. Filter center tracks the smaller gear's size (small = bright).
- * - The drive adds a low hum whose pitch follows its RPM.
- * - One-shots: mesh snap (transient click), refusal (thud), save (chime).
+ * Mesh voice = SCHEDULED TRANSIENT CLANKS, not modulated noise: individual
+ * metallic ticks fired at the mesh's true tooth-pass rate (teeth × RPM/60 — a
+ * property of the contact, since N·ω is conserved across a mesh). Each tick is
+ * a pre-rendered inharmonic-metal partial stack (bell-like: f, 2.76f, 5.4f)
+ * with a noise head, sharp attack, ~35 ms decay, and per-tick pitch/amplitude
+ * jitter. Discrete at low rates (clack… clack), fusing into a mechanical buzz
+ * at speed — the way real gearing behaves. A lookahead scheduler books ticks
+ * ~180 ms ahead on the audio clock; nothing runs per animation frame.
+ *
+ * The drive adds a low gated hum (only above 15 RPM) tracking its RPM.
+ * One-shots: mesh snap, refusal thud, save chime.
  *
  * Autoplay rules: the AudioContext is created lazily on the first user gesture
  * (pointer/keydown), so the first drag both places and unmutes.
  */
 
 export type MeshVoice = {
-  /** Modulation rate in Hz: teeth × RPM / 60 (same for both gears at the mesh). */
+  /** Tick rate in Hz: teeth × RPM / 60 (same for both gears at the mesh). */
   toothHz: number
-  /** Filter center hint from the smaller gear's tooth count (bigger = lower). */
+  /** Resonance pitch for the clank, from the smaller gear's tooth count. */
   pitchHz: number
   /** Relative weight — louder when more torque flows through the mesh. */
   gain: number
@@ -46,32 +48,31 @@ export function persistSoundPref(enabled: boolean) {
   }
 }
 
-/** Filter center for a mesh, from the smaller gear's tooth count. */
+/** Clank resonance for a mesh, from the smaller gear's tooth count. */
 export function meshPitchHz(minTeeth: number): number {
-  // Tuned dark per user ear: 10 teeth ≈ 3 kHz (clockwork, not piercing);
-  // 72 ≈ 650 Hz (heavy machinery).
+  // 10 teeth ≈ 2.1 kHz (clockwork clack); 72 ≈ 480 Hz (heavy thud-clank).
   const t = Math.min(72, Math.max(10, minTeeth))
-  return 3000 - ((t - 10) / 62) * 2350
+  return 2100 - ((t - 10) / 62) * 1620
 }
 
-type Voice = {
-  noise: AudioBufferSourceNode
-  filter: BiquadFilterNode
-  carrier: GainNode
-  modOsc: OscillatorNode
-  modDepth: GainNode
-  out: GainNode
-}
+type MeshState = MeshVoice & { nextTickAt: number }
+
+const LOOKAHEAD_S = 0.18
+const TIMER_MS = 60
+/** Above this rate the clanks perceptually fuse; stop scheduling each one. */
+const MAX_SCHEDULED_HZ = 220
 
 export class SoundEngine {
   private ctx: AudioContext | null = null
   private master: GainNode | null = null
   private enabled = true
-  private voices = new Map<string, Voice>()
+  private meshes = new Map<string, MeshState>()
+  private running = false
+  private clankBuffer: AudioBuffer | null = null
   private humOsc: OscillatorNode | null = null
   private humGain: GainNode | null = null
   private humFilter: BiquadFilterNode | null = null
-  private noiseBuffer: AudioBuffer | null = null
+  private schedulerId: number | null = null
 
   isEnabled(): boolean {
     return this.enabled
@@ -96,12 +97,12 @@ export class SoundEngine {
       const master = ctx.createGain()
       master.gain.value = this.enabled ? 1 : 0
       const limiter = ctx.createDynamicsCompressor()
-      limiter.threshold.value = -18
+      limiter.threshold.value = -16
       limiter.ratio.value = 12
       master.connect(limiter).connect(ctx.destination)
       this.ctx = ctx
       this.master = master
-      this.noiseBuffer = makeNoiseBuffer(ctx)
+      this.clankBuffer = makeClankBuffer(ctx)
       return ctx
     } catch {
       return null
@@ -115,52 +116,76 @@ export class SoundEngine {
     }
   }
 
-  /** Sync mesh voices with the current machine. Keys are stable mesh ids. */
+  /** Sync the mesh registry with the machine; keys are stable mesh ids. */
   updateMeshes(meshes: ReadonlyMap<string, MeshVoice>, running: boolean) {
     const ctx = this.ensureContext()
-    if (!ctx || !this.master) return
-    this.meshesNow = meshes
+    if (!ctx) return
+    this.running = running
 
-    // Total loudness budget across voices: many meshes shouldn't get louder.
-    const totalGain = meshes.size > 0 ? Math.min(1, 2.2 / Math.sqrt(meshes.size)) : 0
-
-    for (const key of [...this.voices.keys()]) {
-      if (!meshes.has(key)) {
-        const v = this.voices.get(key)!
-        v.out.gain.setTargetAtTime(0, ctx.currentTime, 0.05)
-        window.setTimeout(() => {
-          if (this.voices.get(key) === v && this.meshesNow?.get(key) === undefined) {
-            this.voices.delete(key)
-            try {
-              v.modOsc.stop()
-              v.noise.stop()
-            } catch {
-              /* already stopped */
-            }
-            v.carrier.disconnect()
-            v.out.disconnect()
-          }
-        }, 350)
+    for (const key of [...this.meshes.keys()]) {
+      if (!meshes.has(key)) this.meshes.delete(key)
+    }
+    for (const [key, m] of meshes) {
+      const existing = this.meshes.get(key)
+      if (existing) {
+        existing.toothHz = m.toothHz
+        existing.pitchHz = m.pitchHz
+        existing.gain = m.gain
+      } else {
+        this.meshes.set(key, { ...m, nextTickAt: ctx.currentTime + 0.05 })
       }
     }
 
-    for (const [key, m] of meshes) {
-      let v = this.voices.get(key)
-      if (!v) {
-        const made = this.makeVoice()
-        if (!made) continue
-        v = made
-        this.voices.set(key, v)
-      }
-      const t = ctx.currentTime
-      const active = running ? m.gain * totalGain : 0
-      v.out.gain.setTargetAtTime(active * 0.28, t, 0.08)
-      v.modOsc.frequency.setTargetAtTime(Math.max(0.5, Math.min(400, m.toothHz)), t, 0.08)
-      v.filter.frequency.setTargetAtTime(m.pitchHz, t, 0.08)
+    if (this.schedulerId === null) {
+      this.schedulerId = window.setInterval(() => this.scheduleClanks(), TIMER_MS)
     }
   }
 
-  private meshesNow: ReadonlyMap<string, MeshVoice> | null = null
+  /**
+   * Book every mesh's clanks inside the lookahead window on the audio clock.
+   * Amplitude budget: many meshes shouldn't play louder than one.
+   */
+  private scheduleClanks() {
+    const ctx = this.ctx
+    if (!ctx || !this.master || !this.clankBuffer) return
+    if (!this.enabled || !this.running || this.meshes.size === 0) {
+      // Keep nextTickAt fresh so unmute/resume doesn't burst a backlog.
+      const now = ctx.currentTime
+      for (const m of this.meshes.values()) m.nextTickAt = Math.max(m.nextTickAt, now)
+      return
+    }
+    const horizon = ctx.currentTime + LOOKAHEAD_S
+    const budget = Math.min(1, 2.2 / Math.sqrt(this.meshes.size))
+
+    for (const m of this.meshes.values()) {
+      if (m.nextTickAt < ctx.currentTime) m.nextTickAt = ctx.currentTime
+      if (m.toothHz > MAX_SCHEDULED_HZ) continue // perceptually fused; skip
+      const interval = 1 / m.toothHz
+      while (m.nextTickAt < horizon) {
+        const t = m.nextTickAt
+        this.fireClank(t, m.pitchHz, m.gain * budget)
+        m.nextTickAt += interval
+      }
+    }
+  }
+
+  private fireClank(when: number, pitchHz: number, level: number) {
+    const ctx = this.ctx!
+    const src = ctx.createBufferSource()
+    src.buffer = this.clankBuffer
+    // Pitch the recorded reference (1.8 kHz) to this mesh's resonance, with
+    // per-tick jitter so the machine never sounds sample-looped.
+    const jitterRate = (pitchHz / 1800) * (0.92 + Math.random() * 0.16)
+    src.playbackRate.value = Math.max(0.25, Math.min(4, jitterRate))
+    const gain = ctx.createGain()
+    gain.gain.value = Math.max(0, Math.min(1, level * (0.6 + Math.random() * 0.5)))
+    src.connect(gain).connect(this.master!)
+    src.start(when)
+    src.onended = () => {
+      src.disconnect()
+      gain.disconnect()
+    }
+  }
 
   /** Drive hum: low tone tracking RPM; null or a crawl clears it. */
   updateHum(rpm: number | null) {
@@ -194,32 +219,6 @@ export class SoundEngine {
     this.humGain!.gain.setTargetAtTime(this.enabled ? 0.022 : 0, t, 0.12)
   }
 
-  private makeVoice(): Voice | null {
-    const ctx = this.ensureContext()
-    if (!ctx || !this.master || !this.noiseBuffer) return null
-    const noise = ctx.createBufferSource()
-    noise.buffer = this.noiseBuffer
-    noise.loop = true
-    const filter = ctx.createBiquadFilter()
-    filter.type = 'bandpass'
-    filter.frequency.value = 1500
-    filter.Q.value = 1.1 // low resonance: ticks read as machinery, not whistles
-    const carrier = ctx.createGain()
-    carrier.gain.value = 0.5
-    const out = ctx.createGain()
-    out.gain.value = 0
-    const modOsc = ctx.createOscillator()
-    modOsc.type = 'sine'
-    modOsc.frequency.value = 8
-    const modDepth = ctx.createGain()
-    modDepth.gain.value = 0.5
-    modOsc.connect(modDepth).connect(carrier.gain)
-    noise.connect(filter).connect(carrier).connect(out).connect(this.master)
-    noise.start()
-    modOsc.start()
-    return { noise, filter, carrier, modOsc, modDepth, out }
-  }
-
   // --- One-shots -------------------------------------------------------------
 
   private blip(opts: {
@@ -244,10 +243,13 @@ export class SoundEngine {
     osc.stop(t + opts.duration + 0.02)
   }
 
-  /** Mechanical click on a successful mesh. */
+  /** Heavier double-clank on a successful mesh. */
   snap() {
-    this.blip({ type: 'square', from: 2600, to: 900, duration: 0.035, gain: 0.08 })
-    this.blip({ type: 'triangle', from: 320, to: 180, duration: 0.06, gain: 0.05 })
+    const ctx = this.ensureContext()
+    if (ctx && this.master && this.enabled && this.clankBuffer) {
+      this.fireClank(ctx.currentTime, 1700, 0.5)
+      this.fireClank(ctx.currentTime + 0.045, 1150, 0.35)
+    }
   }
 
   /** Dull thud on a refused placement. */
@@ -264,16 +266,31 @@ export class SoundEngine {
   }
 }
 
-function makeNoiseBuffer(ctx: AudioContext): AudioBuffer {
-  const seconds = 2
-  const buffer = ctx.createBuffer(1, ctx.sampleRate * seconds, ctx.sampleRate)
+/**
+ * The clank: inharmonic metal partials (f, 2.76f, 5.4f — bell ratios, so it
+ * reads as metal, not as a musical tone) with a 2 ms noise head and a fast
+ * exponential decay. Recorded at a 1.8 kHz reference for runtime re-pitching.
+ */
+function makeClankBuffer(ctx: AudioContext): AudioBuffer {
+  const seconds = 0.045
+  const length = Math.floor(ctx.sampleRate * seconds)
+  const buffer = ctx.createBuffer(1, length, ctx.sampleRate)
   const data = buffer.getChannelData(0)
-  let last = 0
-  for (let i = 0; i < data.length; i++) {
-    // Slightly low-passed white noise: less hiss, more machinery.
-    const white = Math.random() * 2 - 1
-    last = 0.85 * last + 0.15 * white
-    data[i] = last * 2.4
+  const f = 1800
+  const partials = [
+    { ratio: 1, amp: 1.0, decay: 55 },
+    { ratio: 2.76, amp: 0.45, decay: 90 },
+    { ratio: 5.4, amp: 0.22, decay: 150 },
+  ]
+  for (let i = 0; i < length; i++) {
+    const t = i / ctx.sampleRate
+    let v = 0
+    for (const p of partials) {
+      v += p.amp * Math.sin(2 * Math.PI * f * p.ratio * t) * Math.exp(-p.decay * t)
+    }
+    // Noise head: the initial impact transient.
+    if (t < 0.002) v += (Math.random() * 2 - 1) * (1 - t / 0.002) * 0.9
+    data[i] = Math.max(-1, Math.min(1, v * 0.55))
   }
   return buffer
 }
