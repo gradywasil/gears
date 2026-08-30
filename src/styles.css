@@ -165,6 +165,9 @@ input[type='range'] {
 
 .tray-chip canvas {
   display: block;
+  /* The buffer is DPR-scaled for crispness; the box stays chip-sized. */
+  width: 56px;
+  height: 56px;
 }
 
 .tray-chip-label {
