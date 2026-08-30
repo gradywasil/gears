@@ -14,6 +14,12 @@ export type Gear = {
   teeth: number
   x: number
   y: number
+  /** Compound pair (fast-follow #3): the other gear locked on this shaft. */
+  lockedTo?: string
+}
+
+export function areLocked(a: Gear, b: Gear): boolean {
+  return a.lockedTo === b.id && b.lockedTo === a.id
 }
 
 /** Pitch radius: r = m·N/2 (R3). */
@@ -26,9 +32,9 @@ export function tipRadiusOf(teeth: number): number {
   return radiusOf(teeth) + MODULE
 }
 
-export function makeGear(id: string, teeth: number, x: number, y: number): Gear {
+export function makeGear(id: string, teeth: number, x: number, y: number, lockedTo?: string): Gear {
   if (!Number.isInteger(teeth) || teeth < 6 || teeth > 200) {
     throw new Error(`teeth out of range: ${teeth}`)
   }
-  return { id, teeth, x, y }
+  return lockedTo === undefined ? { id, teeth, x, y } : { id, teeth, x, y, lockedTo }
 }

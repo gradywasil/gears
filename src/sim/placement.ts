@@ -18,20 +18,23 @@
 
 import type { Gear } from './gear.ts'
 import { radiusOf, tipRadiusOf } from './gear.ts'
-import { meshRelation } from './mesh.ts'
-import { buildMeshGraph } from './mesh.ts'
+import { meshEdgesBetween, meshRelation } from './mesh.ts'
 import { meshedTheta } from './phase.ts'
 
 /** How far the cursor may sit from the ideal mesh circle to snap. */
 export const SNAP_RANGE = 20
 
+/** Drop within this radius of a gear's center to lock a compound instead. */
+export const LOCK_RADIUS = 26
+
 /** Allowed phase misalignment for secondary meshes, as a fraction of tooth pitch. */
 const PHASE_TOLERANCE = 1 / 6
 
 /** Plain-language refusal copy (critique clarify): five words, names the problem. */
-export function refusalLabel(reason: 'overlap' | 'jam' | 'phase'): string {
+export function refusalLabel(reason: 'overlap' | 'jam' | 'phase' | 'locked'): string {
   if (reason === 'overlap') return 'No room — gears would collide'
   if (reason === 'jam') return 'Would lock the mechanism'
+  if (reason === 'locked') return 'Shaft is full — pairs only'
   return 'Teeth out of phase — wait a turn'
 }
 
@@ -43,32 +46,10 @@ export type PlacementVerdict = {
   partner: Gear | null
   /** Every gear the snapped position meshes (may include several). */
   partners: Gear[]
+  /** Compound lock: the gear the drop shares a shaft with (drop-on-center). */
+  lock: Gear | null
   valid: boolean
-  reason: 'ok' | 'overlap' | 'jam' | 'phase'
-}
-
-/** Shortest mesh-graph path length between two gears, or −1 if disconnected. */
-function meshPathLength(gears: readonly Gear[], fromId: string, toId: string): number {
-  if (fromId === toId) return 0
-  const graph = buildMeshGraph(gears)
-  const seen = new Set([fromId])
-  let frontier = [fromId]
-  let depth = 0
-  while (frontier.length > 0) {
-    depth += 1
-    const next: string[] = []
-    for (const id of frontier) {
-      for (const neighbor of graph.get(id) ?? []) {
-        if (neighbor === toId) return depth
-        if (!seen.has(neighbor)) {
-          seen.add(neighbor)
-          next.push(neighbor)
-        }
-      }
-    }
-    frontier = next
-  }
-  return -1
+  reason: 'ok' | 'overlap' | 'jam' | 'phase' | 'locked'
 }
 
 export function evaluatePlacement(
@@ -81,8 +62,79 @@ export function evaluatePlacement(
 ): PlacementVerdict {
   const others = gears.filter((g) => g.id !== draggedId)
   const newTip = tipRadiusOf(teeth)
+  const fail = (reason: PlacementVerdict['reason'], x: number, y: number, lock: Gear | null = null) => ({
+    x,
+    y,
+    partner: null,
+    partners: [],
+    lock,
+    valid: false,
+    reason,
+  })
 
-  // Nearest snap candidate: smallest |d − ideal| within SNAP_RANGE.
+  // --- Compound lock: drop near an unlocked gear's center (fast-follow #3). ---
+  let lock: Gear | null = null
+  let lockError = LOCK_RADIUS
+  for (const g of others) {
+    const d = Math.hypot(cursorX - g.x, cursorY - g.y)
+    if (d <= lockError) {
+      lock = g
+      lockError = d
+    }
+  }
+  if (lock) {
+    const draggedLocked =
+      draggedId !== undefined && gears.some((g) => g.id === draggedId && g.lockedTo)
+    if (lock.lockedTo) {
+      // Pairs only: the shaft is taken.
+      return fail('locked', lock.x, lock.y, lock)
+    }
+    if (draggedLocked) {
+      return fail('locked', lock.x, lock.y, lock)
+    }
+    const candidate: Gear = { id: draggedId ?? '__candidate__', teeth, x: lock.x, y: lock.y }
+    const layerPartners = others.filter(
+      (g) => g.id !== lock.id && meshRelation(candidate, g) === 'meshed',
+    )
+    // The co-axial base is intentional overlap; everything else must clear.
+    for (const g of others) {
+      if (g.id === lock.id || layerPartners.includes(g)) continue
+      const minClear = newTip + tipRadiusOf(g.teeth) - 0.5
+      if (Math.hypot(candidate.x - g.x, candidate.y - g.y) < minClear) {
+        return fail('overlap', candidate.x, candidate.y, lock)
+      }
+    }
+    // The locked layer co-rotates with the base: its angle IS the base's angle.
+    if (angles && layerPartners.length > 0) {
+      const thetaCandidate = angles.get(lock.id) ?? 0
+      for (const other of layerPartners) {
+        const pitch = (2 * Math.PI) / other.teeth
+        const required = meshedTheta(thetaCandidate, candidate, other)
+        const actual = angles.get(other.id) ?? 0
+        const residue = Math.abs(actual - required - Math.round((actual - required) / pitch) * pitch)
+        if (residue > pitch * PHASE_TOLERANCE) {
+          return fail('phase', candidate.x, candidate.y, lock)
+        }
+        // Direction parity through the body: path back to the base counts mesh
+        // edges only (locked edges don't flip); plus this new mesh must be even.
+        const meshEdges = meshEdgesBetween(others, lock.id, other.id)
+        if (meshEdges >= 0 && (meshEdges + 1) % 2 === 1) {
+          return fail('jam', candidate.x, candidate.y, lock)
+        }
+      }
+    } else if (layerPartners.length > 0) {
+      // Angle-free callers still get the structural parity check.
+      for (const other of layerPartners) {
+        const meshEdges = meshEdgesBetween(others, lock.id, other.id)
+        if (meshEdges >= 0 && (meshEdges + 1) % 2 === 1) {
+          return fail('jam', candidate.x, candidate.y, lock)
+        }
+      }
+    }
+    return { x: lock.x, y: lock.y, partner: null, partners: layerPartners, lock, valid: true, reason: 'ok' }
+  }
+
+  // --- Mesh / free placement (as before, generalized to union parity). ------
   let partner: Gear | null = null
   let partnerError = SNAP_RANGE
   for (const g of others) {
@@ -105,8 +157,6 @@ export function evaluatePlacement(
   }
 
   const candidate: Gear = { id: draggedId ?? '__candidate__', teeth, x, y }
-
-  // All gears the snapped position meshes (partner first by construction).
   const partners = others.filter((g) => meshRelation(candidate, g) === 'meshed')
 
   // Rule 1: tip overlap with any non-partner refuses.
@@ -114,15 +164,16 @@ export function evaluatePlacement(
     if (partners.includes(g)) continue
     const minClear = newTip + tipRadiusOf(g.teeth) - 0.5
     if (Math.hypot(x - g.x, y - g.y) < minClear) {
-      return { x, y, partner, partners, valid: false, reason: 'overlap' }
+      return { x, y, partner, partners, lock: null, valid: false, reason: 'overlap' }
     }
   }
 
-  // Rule 2a: odd closed loops lock regardless of phase.
+  // Rule 2a: odd closed loops lock. The cycle's mesh-edge count is the anchor
+  // link + path + the closing link (both flipping meshes), so an odd path jams.
   for (let i = 1; i < partners.length; i++) {
-    const pathLen = meshPathLength(others, partners[0]!.id, partners[i]!.id)
-    if (pathLen >= 0 && pathLen % 2 === 1) {
-      return { x, y, partner, partners, valid: false, reason: 'jam' }
+    const meshEdges = meshEdgesBetween(others, partners[0]!.id, partners[i]!.id)
+    if (meshEdges >= 0 && meshEdges % 2 === 1) {
+      return { x, y, partner, partners, lock: null, valid: false, reason: 'jam' }
     }
   }
 
@@ -137,10 +188,10 @@ export function evaluatePlacement(
       const actual = angles.get(other.id) ?? 0
       const residue = Math.abs(actual - required - Math.round((actual - required) / pitch) * pitch)
       if (residue > pitch * PHASE_TOLERANCE) {
-        return { x, y, partner, partners, valid: false, reason: 'phase' }
+        return { x, y, partner, partners, lock: null, valid: false, reason: 'phase' }
       }
     }
   }
 
-  return { x, y, partner, partners, valid: true, reason: 'ok' }
+  return { x, y, partner, partners, lock: null, valid: true, reason: 'ok' }
 }

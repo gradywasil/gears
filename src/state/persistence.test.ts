@@ -47,7 +47,7 @@ describe('persistence', () => {
 
     const loaded = loadSave(storage, AUTOSAVE_KEY)
     expect(loaded).not.toBeNull()
-    expect(loaded!.v).toBe(1)
+    expect(loaded!.v).toBe(2)
     expect(loaded!.name).toBe('My train')
     expect(loaded!.gears).toHaveLength(2)
     expect(loaded!.gears[1]).toEqual({ id: 'b', teeth: 10, x: 202, y: 100 })
@@ -55,9 +55,34 @@ describe('persistence', () => {
     expect(loaded!.rpm).toBe(45)
   })
 
+  it('round-trips compound locks (schema v2)', () => {
+    const a = makeGear('a', 24, 100, 100)
+    const b = { ...makeGear('b', 42, 100, 100), lockedTo: 'a' }
+    const locked = { ...a, lockedTo: 'b' }
+    writeSave(storage, AUTOSAVE_KEY, makeEnvelope([locked, b], 'a', 30, 'Compound'))
+    const loaded = loadSave(storage, AUTOSAVE_KEY)
+    expect(loaded!.gears.find((g) => g.id === 'a')!.lockedTo).toBe('b')
+    expect(loaded!.gears.find((g) => g.id === 'b')!.lockedTo).toBe('a')
+  })
+
+  it('migrates v1 saves (pre-compound) forward without data loss', () => {
+    const v1 = {
+      v: 1,
+      savedAt: 123,
+      gears: [{ id: 'a', teeth: 24, x: 10, y: 10 }],
+      driveId: 'a',
+      rpm: 30,
+    }
+    storage.setItem(AUTOSAVE_KEY, JSON.stringify(v1))
+    const loaded = loadSave(storage, AUTOSAVE_KEY)
+    expect(loaded!.v).toBe(2)
+    expect(loaded!.gears).toHaveLength(1)
+    expect(loaded!.gears[0]!.lockedTo).toBeUndefined()
+  })
+
   it('carries the version field from day one', () => {
     const envelope = makeEnvelope([], null, 30)
-    expect(envelope.v).toBe(1)
+    expect(envelope.v).toBe(2)
   })
 
   it('quarantines corrupt saves and falls back to empty', () => {

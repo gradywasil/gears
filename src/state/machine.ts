@@ -22,9 +22,10 @@ export type MachineState = {
 }
 
 export type MachineAction =
-  | { type: 'place'; gear: Gear; partnerId: string | null }
+  | { type: 'place'; gear: Gear; partnerId: string | null; lockTo?: string | null }
   | { type: 'move'; id: string; x: number; y: number; partnerId: string | null }
   | { type: 'delete'; id: string }
+  | { type: 'unlock'; id: string; x: number; y: number; partnerId: string | null }
   | { type: 'setDrive'; id: string }
   | { type: 'setRpm'; value: number }
   | { type: 'setRunning'; value: boolean }
@@ -74,14 +75,18 @@ export function initialMachineState(): MachineState {
 export function machineReducer(state: MachineState, action: MachineAction): MachineState {
   switch (action.type) {
     case 'place': {
-      const { gear, partnerId } = action
+      const { gear, partnerId, lockTo } = action
       const partner = state.gears.find((g) => g.id === partnerId)
-      const angle = partner
-        ? meshedTheta(state.angles[partner.id] ?? 0, partner, gear)
-        : 0
+      const lockBase = state.gears.find((g) => g.id === lockTo)
+      let angle = 0
+      if (partner) angle = meshedTheta(state.angles[partner.id] ?? 0, partner, gear)
+      else if (lockBase) angle = state.angles[lockBase.id] ?? 0 // co-rotating shaft
+      const gears = lockBase
+        ? state.gears.map((g) => (g.id === lockBase.id ? { ...g, lockedTo: gear.id } : g))
+        : [...state.gears]
       return {
         ...state,
-        gears: [...state.gears, gear],
+        gears: [...gears, lockBase ? { ...gear, lockedTo: lockBase.id } : gear],
         angles: { ...state.angles, [gear.id]: angle },
         driveId: state.driveId ?? gear.id,
         selectedId: gear.id,
@@ -109,10 +114,33 @@ export function machineReducer(state: MachineState, action: MachineAction): Mach
       const wasDrive = state.driveId === action.id
       return {
         ...state,
-        gears: state.gears.filter((g) => g.id !== action.id),
+        // Removing one layer of a compound leaves the other plain.
+        gears: state.gears
+          .filter((g) => g.id !== action.id)
+          .map((g) => (g.lockedTo === action.id ? { ...g, lockedTo: undefined } : g)),
         angles,
         driveId: wasDrive ? null : state.driveId,
         selectedId: state.selectedId === action.id ? null : state.selectedId,
+      }
+    }
+    case 'unlock': {
+      const freed = state.gears.find((g) => g.id === action.id)
+      if (!freed || !freed.lockedTo) return state
+      const partner = state.gears.find((g) => g.id === freed.lockedTo)
+      const moved: Gear = { ...freed, x: action.x, y: action.y, lockedTo: undefined }
+      const meshPartner = state.gears.find((g) => g.id === action.partnerId)
+      const angle = meshPartner
+        ? meshedTheta(state.angles[meshPartner.id] ?? 0, meshPartner, moved)
+        : (state.angles[action.id] ?? 0)
+      return {
+        ...state,
+        gears: state.gears.map((g) => {
+          if (g.id === moved.id) return moved
+          if (partner && g.id === partner.id) return { ...g, lockedTo: undefined }
+          return g
+        }),
+        angles: { ...state.angles, [action.id]: angle },
+        anglesVersion: state.anglesVersion + 1,
       }
     }
     case 'setDrive':

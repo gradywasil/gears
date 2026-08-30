@@ -56,6 +56,25 @@ describe('kinematics solver', () => {
   it('throws for an unknown drive', () => {
     expect(() => solveTrain([makeGear('a', 10, 0, 0)], 'nope', 60)).toThrow()
   })
+
+  it('compound locks: same shaft, same speed and direction; ratio passes through', () => {
+    // Drive 10t locked with a 40t; the 40t layer meshes a 20t.
+    const drive = { ...makeGear('drive', 10, 0, 0), lockedTo: 'big' }
+    const big = {
+      ...makeGear('big', 40, 0, 0),
+      lockedTo: 'drive',
+    }
+    const follower = makeGear('follower', 20, radiusOf(40) + radiusOf(20), 0)
+    const spins = solveTrain([drive, big, follower], 'drive', 60)
+
+    // One body: the locked layer co-rotates at the drive's exact speed.
+    expect(spins.get('big')!.rpm).toBeCloseTo(60)
+    expect(spins.get('big')!.direction).toBe(1)
+
+    // The mesh from the 40t layer: 60 × 40/20 = 120 RPM, flipped.
+    expect(spins.get('follower')!.rpm).toBeCloseTo(120)
+    expect(spins.get('follower')!.direction).toBe(-1)
+  })
 })
 
 describe('loop consistency', () => {

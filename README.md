@@ -12,6 +12,10 @@ is real anyway.
 - **Snap-to-mesh building** — drag any of eight gear sizes (10–72 teeth) from the
   tray. A ghost preview shows exactly where it will snap and which gear it will
   mesh with before you let go.
+- **Compound gears** — drop a gear straight onto another gear's center and it
+  locks onto the same shaft (a bolt marks the pair). Both layers turn as one
+  body, each meshing the train at its own size — chain pairs for real
+  multi-stage gearbox ratios. Unlock from the inspector whenever you like.
 - **Physically honest motion** — true involute tooth profiles, phase-correct
   meshing, speed stepped by exact tooth ratios, direction alternating at every
   mesh. Impossible placements (collisions, mechanisms that would lock, teeth out
@@ -62,7 +66,9 @@ step by the inverse tooth ratio at each mesh (a 10-tooth driving a 20-tooth
 halves the speed and doubles the torque), direction alternates, and each new
 gear's phase is computed so its teeth interlock with partners it touches —
 including multi-gear meshes, which are validated against the current rotation
-phases of every partner before they're allowed.
+phases of every partner before they're allowed. Compound pairs propagate speed
+unchanged through their shared shaft while each layer's meshes step the ratio
+at that layer's own tooth count.
 
 Rendering is Canvas 2D with per-size sprite caching: each gear size is drawn
 once to an offscreen canvas and rotated cheaply every frame, which is why a
@@ -81,9 +87,9 @@ once to an offscreen canvas and rotated cheaply every frame, which is why a
 ## Troubleshooting
 
 - **A drop was refused** — the pill tells you why: no room (teeth would
-  collide), the mechanism would lock (a loop of gears can't all turn), or the
+  collide), the mechanism would lock (a loop of gears can't all turn), the
   teeth are out of phase (multi-mesh drops only work when the phases line up —
-  wait a turn or pause to build).
+  wait a turn or pause to build), or the shaft is full (compounds are pairs).
 - **Nothing spins** — every train needs a drive. If you deleted it, select any
   gear and choose *Set as drive*.
 - **No sound?** — browsers only allow audio after your first click or keypress;

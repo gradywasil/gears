@@ -8,6 +8,7 @@ export type InspectorProps = {
   onSetDrive: () => void
   onDelete: () => void
   onClose: () => void
+  onUnlock?: () => void
 }
 
 function DirectionMark({ direction }: { direction: 1 | -1 }) {
@@ -32,7 +33,15 @@ function DirectionMark({ direction }: { direction: 1 | -1 }) {
   )
 }
 
-export function Inspector({ gear, spin, isDrive, onSetDrive, onDelete, onClose }: InspectorProps) {
+export function Inspector({
+  gear,
+  spin,
+  isDrive,
+  onSetDrive,
+  onDelete,
+  onClose,
+  onUnlock,
+}: InspectorProps) {
   const rpm = spin ? spin.rpm : 0
   const torque = spin ? spin.torqueMultiplier : 1
   return (
@@ -76,6 +85,11 @@ export function Inspector({ gear, spin, isDrive, onSetDrive, onDelete, onClose }
         ) : (
           <button type="button" className="secondary-button" onClick={onSetDrive}>
             Set as drive
+          </button>
+        )}
+        {gear.lockedTo && onUnlock && (
+          <button type="button" className="secondary-button" onClick={onUnlock}>
+            Unlock shaft
           </button>
         )}
         <button type="button" className="danger-button" onClick={onDelete}>

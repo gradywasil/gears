@@ -6,13 +6,13 @@
 
 import type { Gear } from '../sim/gear.ts'
 
-export const SCHEMA_VERSION = 1
+export const SCHEMA_VERSION = 2
 
 export type SaveEnvelope = {
   v: number
   savedAt: number
   name?: string
-  gears: Array<Pick<Gear, 'id' | 'teeth' | 'x' | 'y'>>
+  gears: Array<Pick<Gear, 'id' | 'teeth' | 'x' | 'y' | 'lockedTo'>>
   driveId: string | null
   rpm: number
 }
@@ -21,7 +21,14 @@ export const AUTOSAVE_KEY = 'gears.autosave'
 export const SLOT_KEYS = Array.from({ length: 6 }, (_, i) => `gears.slot.${i}`)
 export const SLOT_COUNT = 6
 
-const migrations: Array<(old: SaveEnvelope) => SaveEnvelope> = []
+// migrations[v] upgrades a v envelope to v+1; index 0 is unused (v0 never existed).
+const migrations: Array<((old: SaveEnvelope) => SaveEnvelope) | undefined> = [
+  undefined,
+  // v1 → v2 (fast-follow #3): compound locks. v1 records simply have no
+  // lockedTo field — unlocked by omission — so the migration only bumps the
+  // envelope version.
+  (old) => ({ ...old, v: 2 }),
+]
 function migrate(envelope: SaveEnvelope): SaveEnvelope {
   let current = envelope
   while (current.v < SCHEMA_VERSION) {
@@ -89,7 +96,13 @@ export function makeEnvelope(
     v: SCHEMA_VERSION,
     savedAt: Date.now(),
     name,
-    gears: gears.map((g) => ({ id: g.id, teeth: g.teeth, x: g.x, y: g.y })),
+    gears: gears.map((g) => ({
+      id: g.id,
+      teeth: g.teeth,
+      x: g.x,
+      y: g.y,
+      lockedTo: g.lockedTo,
+    })),
     driveId,
     rpm,
   }

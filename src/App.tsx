@@ -115,7 +115,7 @@ export function App() {
       if (envelope && envelope.gears.length > 0) {
         dispatch({
           type: 'hydrate',
-          gears: envelope.gears.map((g) => makeGear(g.id, g.teeth, g.x, g.y)),
+          gears: envelope.gears.map((g) => makeGear(g.id, g.teeth, g.x, g.y, g.lockedTo)),
           driveId: envelope.driveId,
           rpm: envelope.rpm,
           running: runningRef.current,
@@ -280,11 +280,47 @@ export function App() {
   }, [state.selectedId, state.gears, state.angles, savesOpen, deleteGear, toggleRun])
 
   const onPlace = useCallback(
-    (teeth: number, x: number, y: number, partnerId: string | null) => {
-      dispatch({ type: 'place', gear: makeGear(crypto.randomUUID(), teeth, x, y), partnerId })
-      if (partnerId) sound().snap()
+    (teeth: number, x: number, y: number, partnerId: string | null, lockTo?: string | null) => {
+      dispatch({
+        type: 'place',
+        gear: makeGear(crypto.randomUUID(), teeth, x, y),
+        partnerId,
+        lockTo,
+      })
+      if (partnerId || lockTo) sound().snap()
     },
     [],
+  )
+
+  /** Unlock a compound layer: find it a free spot near the shaft, then free it. */
+  const unlockGear = useCallback(
+    (id: string) => {
+      const gear = state.gears.find((g) => g.id === id)
+      if (!gear?.lockedTo) return
+      const angles = new Map(Object.entries(state.angles))
+      for (const r of [70, 140, 210, 300]) {
+        const steps = 8
+        for (let i = 0; i < steps; i++) {
+          const a = (i / steps) * 2 * Math.PI + (r === 70 ? 0 : Math.PI / 8)
+          const x = gear.x + r * Math.cos(a)
+          const y = gear.y + r * Math.sin(a)
+          const verdict = evaluatePlacement(state.gears, gear.teeth, x, y, gear.id, angles)
+          if (verdict.valid) {
+            dispatch({
+              type: 'unlock',
+              id,
+              x: verdict.x,
+              y: verdict.y,
+              partnerId: verdict.partner?.id ?? null,
+            })
+            sound().snap()
+            return
+          }
+        }
+      }
+      setToast({ message: 'No room to unlock that gear here.' })
+    },
+    [state.gears, state.angles],
   )
   const onMove = useCallback(
     (id: string, x: number, y: number, partnerId: string | null) => {
@@ -496,6 +532,7 @@ export function App() {
               isDrive={selected.id === state.driveId}
               onSetDrive={() => dispatch({ type: 'setDrive', id: selected.id })}
               onDelete={() => deleteGear(selected.id)}
+              onUnlock={() => unlockGear(selected.id)}
               onClose={() => dispatch({ type: 'select', id: null })}
             />
           )}
@@ -508,7 +545,7 @@ export function App() {
               const snapshot = designSnapshot()
               dispatch({
                 type: 'hydrate',
-                gears: envelope.gears.map((g) => makeGear(g.id, g.teeth, g.x, g.y)),
+                gears: envelope.gears.map((g) => makeGear(g.id, g.teeth, g.x, g.y, g.lockedTo)),
                 driveId: envelope.driveId,
                 rpm: envelope.rpm,
                 running: running,

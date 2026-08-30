@@ -25,9 +25,9 @@ describe('placement evaluation', () => {
   it('refuses overlap with a non-partner gear', () => {
     const a = makeGear('a', 20, 0, 0)
     const b = makeGear('b', 20, radiusOf(20) * 2, 0)
-    // Dropping a 20t right on top of a: no snap (already meshed distance? no —
-    // cursor at a's center), heavily overlapping.
-    const v = evaluatePlacement([a, b], 20, 5, 5)
+    // Dropping a 20t between the two meshed gears (away from both centers):
+    // no snap partner, teeth interpenetrate both.
+    const v = evaluatePlacement([a, b], 20, 60, 0)
     expect(v.valid).toBe(false)
     expect(v.reason).toBe('overlap')
   })
@@ -117,5 +117,66 @@ describe('placement evaluation', () => {
     expect(v.partners).toHaveLength(2)
     expect(v.valid).toBe(true)
     expect(v.reason).toBe('ok')
+  })
+})
+
+describe('compound locks (fast-follow #3)', () => {
+  it('drop near a center locks: position adopts the shaft', () => {
+    const base = makeGear('base', 24, 300, 300)
+    const v = evaluatePlacement([base], 10, 305, 302)
+    expect(v.lock?.id).toBe('base')
+    expect(v.partner).toBeNull()
+    expect(v.x).toBeCloseTo(300)
+    expect(v.y).toBeCloseTo(300)
+    expect(v.valid).toBe(true)
+  })
+
+  it('pairs only: a locked shaft refuses another layer', () => {
+    const a = makeGear('a', 24, 0, 0)
+    const b = { ...makeGear('b', 10, 0, 0), lockedTo: 'a' }
+    const lockedA = { ...a, lockedTo: 'b' }
+    const v = evaluatePlacement([lockedA, b], 18, 3, 4)
+    expect(v.valid).toBe(false)
+    expect(v.reason).toBe('locked')
+  })
+
+  it('a locked layer that would tip-overlap a third gear is refused', () => {
+    const base = makeGear('base', 24, 0, 0)
+    // A 42t legally meshed to the base; a 56t layer's teeth would cross it.
+    const bystander = makeGear('by', 42, radiusOf(24) + radiusOf(42), 0)
+    const v = evaluatePlacement([base, bystander], 56, 2, 2)
+    expect(v.lock?.id).toBe('base')
+    expect(v.valid).toBe(false)
+    expect(v.reason).toBe('overlap')
+  })
+
+  it('a locked layer co-rotates: its extra mesh must accept the base angle', () => {
+    const base = makeGear('base', 24, 0, 0)
+    const d = radiusOf(56) + radiusOf(20)
+    const far = makeGear('far', 20, d, 0)
+    const candidate = makeGear('c', 56, 0, 0)
+    const thetaFar = meshedTheta(0.7, candidate, far) // the only angle that interlocks
+    const anglesGood = new Map([
+      ['base', 0.7],
+      ['far', thetaFar],
+    ])
+    expect(evaluatePlacement([base, far], 56, 1, 1, undefined, anglesGood).valid).toBe(true)
+    const anglesBad = new Map([
+      ['base', 0.7],
+      ['far', thetaFar + 0.1], // a third of a pitch off
+    ])
+    const v = evaluatePlacement([base, far], 56, 1, 1, undefined, anglesBad)
+    expect(v.valid).toBe(false)
+    expect(v.reason).toBe('phase')
+  })
+
+  it('an even mesh-cycle through the body turns freely', () => {
+    // base 24t meshes m (144 px); an equal 24t layer locked on base ALSO meshes
+    // m. Cycle mesh edges: base—m, m—layer (the lock edge doesn't flip) = 2 →
+    // even → the train can turn.
+    const b = makeGear('base', 24, 0, 0)
+    const mm = makeGear('m', 24, radiusOf(24) + radiusOf(24), 0)
+    const v = evaluatePlacement([b, mm], 24, 1, 0)
+    expect(v.valid).toBe(true)
   })
 })

@@ -21,7 +21,7 @@ export type MachineProps = {
   drag: DragState
   accent: string
   danger: string
-  onPlace: (teeth: number, x: number, y: number, partnerId: string | null) => void
+  onPlace: (teeth: number, x: number, y: number, partnerId: string | null, lockTo?: string | null) => void
   onMove: (id: string, x: number, y: number, partnerId: string | null) => void
   onSelect: (id: string | null) => void
   onStartMove: (id: string, teeth: number) => void
@@ -29,9 +29,15 @@ export type MachineProps = {
   /** Screen-reader description of the machine state. */
   ariaLabel: string
   /** Refusal feedback triggered outside the canvas (failed keyboard nudge). */
-  pulse?: { x: number; y: number; teeth: number; reason: 'overlap' | 'jam' | 'phase'; at: number } | null
+  pulse?: {
+    x: number
+    y: number
+    teeth: number
+    reason: 'overlap' | 'jam' | 'phase' | 'locked'
+    at: number
+  } | null
   /** Announces a refusal to assistive tech (aria-live lives in App). */
-  onRefusal?: (reason: 'overlap' | 'jam' | 'phase') => void
+  onRefusal?: (reason: 'overlap' | 'jam' | 'phase' | 'locked') => void
 }
 
 const REFUSE_MS = 2200 // label needs reading time; oscillation fades in the first 300ms
@@ -53,7 +59,7 @@ export function MachineCanvas(props: MachineProps) {
     x: number
     y: number
     teeth: number
-    reason: 'overlap' | 'jam' | 'phase'
+    reason: 'overlap' | 'jam' | 'phase' | 'locked'
     until: number
   } | null>(null)
 
@@ -115,7 +121,7 @@ export function MachineCanvas(props: MachineProps) {
       ctx.drawImage(sprite, -half, -half, half * 2, half * 2)
       ctx.restore()
 
-      // Verdict ring around the ghost; partner gets a highlight ring.
+      // Verdict ring around the ghost; partner (or lock base) gets a highlight.
       ctx.save()
       ctx.lineWidth = 2
       ctx.setLineDash([6, 5])
@@ -123,13 +129,24 @@ export function MachineCanvas(props: MachineProps) {
       ctx.beginPath()
       ctx.arc(verdict.x, verdict.y, gearOuterRadius(drag.teeth) + 5, 0, 2 * Math.PI)
       ctx.stroke()
-      if (verdict.partner && verdict.valid) {
+      const highlight = verdict.partner ?? verdict.lock
+      if (highlight && verdict.valid) {
         ctx.setLineDash([])
         ctx.lineWidth = 2.5
         ctx.strokeStyle = accent
         ctx.beginPath()
-        ctx.arc(verdict.partner.x, verdict.partner.y, gearOuterRadius(verdict.partner.teeth) + 5, 0, 2 * Math.PI)
+        ctx.arc(highlight.x, highlight.y, gearOuterRadius(highlight.teeth) + 5, 0, 2 * Math.PI)
         ctx.stroke()
+      }
+      if (verdict.lock && verdict.valid) {
+        // Shaft preview: the compound bolt, ghosted at the shared center.
+        ctx.setLineDash([])
+        ctx.fillStyle = accent
+        ctx.globalAlpha = 0.6
+        const cap = Math.max(5, gearOuterRadius(drag.teeth) * 0.08)
+        ctx.beginPath()
+        ctx.arc(verdict.x, verdict.y, cap, 0, 2 * Math.PI)
+        ctx.fill()
       }
       ctx.restore()
     }
@@ -158,8 +175,17 @@ export function MachineCanvas(props: MachineProps) {
       ctx.clearRect(0, 0, cssW, cssH)
 
       const movingId = propsRef.current.drag?.kind === 'move' ? propsRef.current.drag.id : null
-      for (const gear of gears) {
-        if (gear.id === movingId) continue // hidden while being dragged
+      const byId = new Map(gears.map((g) => [g.id, g]))
+      // Each compound pair is drawn once via its "top" layer (smaller gear, or
+      // the lower id on equal sizes): big layer first, small on top, bolt last.
+      const isTop = (g: (typeof gears)[number]) => {
+        if (!g.lockedTo) return false
+        const other = byId.get(g.lockedTo)
+        if (!other) return false
+        return g.teeth < other.teeth || (g.teeth === other.teeth && g.id < other.id)
+      }
+      const drawGear = (gear: (typeof gears)[number]) => {
+        if (gear.id === movingId) return // hidden while being dragged
         const sprite = gearSprite(gear.teeth, dpr)
         const half = sprite.width / (2 * dpr)
         ctx.save()
@@ -186,6 +212,33 @@ export function MachineCanvas(props: MachineProps) {
           ctx.arc(gear.x, gear.y, gearOuterRadius(gear.teeth) + 10, 0, 2 * Math.PI)
           ctx.stroke()
           ctx.restore()
+        }
+      }
+      const drawBolt = (gear: (typeof gears)[number]) => {
+        ctx.save()
+        ctx.translate(gear.x, gear.y)
+        const cap = Math.max(5, gearOuterRadius(gear.teeth) * 0.08)
+        ctx.fillStyle = '#2A2F36'
+        ctx.beginPath()
+        ctx.arc(0, 0, cap, 0, 2 * Math.PI)
+        ctx.fill()
+        ctx.strokeStyle = '#E8EAEC'
+        ctx.lineWidth = 1.2
+        ctx.beginPath()
+        ctx.moveTo(-cap * 0.55, 0)
+        ctx.lineTo(cap * 0.55, 0)
+        ctx.stroke()
+        ctx.restore()
+      }
+      for (const gear of gears) {
+        if (!gear.lockedTo) drawGear(gear)
+      }
+      for (const gear of gears) {
+        if (isTop(gear)) {
+          const base = byId.get(gear.lockedTo!)!
+          drawGear(base) // large layer under
+          drawGear(gear) // small layer on top
+          drawBolt(gear)
         }
       }
 
@@ -250,13 +303,20 @@ export function MachineCanvas(props: MachineProps) {
       return { x: e.clientX - rect.left, y: e.clientY - rect.top }
     }
 
+    /** Topmost gear under the point: the smallest containing radius wins, so a
+     * compound's top layer is clickable over its base. */
     const hitTest = (x: number, y: number): Gear | null => {
       const { gears } = propsRef.current
-      for (let i = gears.length - 1; i >= 0; i--) {
-        const g = gears[i]!
-        if (Math.hypot(x - g.x, y - g.y) <= gearOuterRadius(g.teeth)) return g
+      let best: Gear | null = null
+      let bestR = Infinity
+      for (const g of gears) {
+        const r = gearOuterRadius(g.teeth)
+        if (Math.hypot(x - g.x, y - g.y) <= r && r < bestR) {
+          best = g
+          bestR = r
+        }
       }
-      return null
+      return best
     }
 
     let pendingMove: { id: string; teeth: number; x: number; y: number } | null = null
@@ -267,7 +327,8 @@ export function MachineCanvas(props: MachineProps) {
       const { x, y } = toLocal(e)
       const hit = hitTest(x, y)
       onSelect(hit?.id ?? null)
-      if (hit) pendingMove = { id: hit.id, teeth: hit.teeth, x, y }
+      // Compound layers are bolted to their shaft: select, but never drag.
+      if (hit && !hit.lockedTo) pendingMove = { id: hit.id, teeth: hit.teeth, x, y }
     }
 
     const onPointerMove = (e: PointerEvent) => {
@@ -283,7 +344,7 @@ export function MachineCanvas(props: MachineProps) {
       const hovering = hitTest(x, y)
       canvasEl.style.cursor = propsRef.current.drag
         ? 'grabbing'
-        : hovering
+        : hovering && !hovering.lockedTo
           ? 'grab'
           : 'default'
     }
@@ -306,8 +367,17 @@ export function MachineCanvas(props: MachineProps) {
         rotation,
       )
       if (verdict.valid) {
-        if (drag.kind === 'new') onPlace(drag.teeth, verdict.x, verdict.y, verdict.partner?.id ?? null)
-        else onMove(drag.id, verdict.x, verdict.y, verdict.partner?.id ?? null)
+        if (drag.kind === 'new') {
+          onPlace(
+            drag.teeth,
+            verdict.x,
+            verdict.y,
+            verdict.partner?.id ?? null,
+            verdict.lock?.id ?? null,
+          )
+        } else {
+          onMove(drag.id, verdict.x, verdict.y, verdict.partner?.id ?? null)
+        }
       } else {
         const reason = verdict.reason === 'ok' ? 'overlap' : verdict.reason
         shakeRef.current = {

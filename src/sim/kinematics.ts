@@ -20,7 +20,9 @@ export type Spin = {
 
 /**
  * Per-gear spin for every gear connected to the drive. Gears absent from the map
- * are stationary (disconnected from the drive).
+ * are stationary (disconnected from the drive). Propagation crosses two edge
+ * kinds: meshes (speed × tooth ratio, direction flips) and compound locks
+ * (same shaft: identical speed and direction — a locked pair is one body).
  */
 export function solveTrain(
   gears: readonly Gear[],
@@ -42,6 +44,20 @@ export function solveTrain(
   while (queue.length > 0) {
     const { id, rpm, direction } = queue.shift()!
     const gear = byId.get(id)!
+
+    // Compound lock: same shaft, same everything.
+    if (gear.lockedTo) {
+      const partner = byId.get(gear.lockedTo)
+      if (partner && !spins.has(partner.id)) {
+        spins.set(partner.id, {
+          rpm,
+          direction,
+          torqueMultiplier: Math.abs(driveRpm / rpm),
+        })
+        queue.push({ id: partner.id, rpm, direction })
+      }
+    }
+
     for (const neighborId of graph.get(id) ?? []) {
       if (spins.has(neighborId)) continue
       const neighbor = byId.get(neighborId)!

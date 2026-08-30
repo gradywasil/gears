@@ -137,4 +137,31 @@ describe('machine state', () => {
     expect(angles['a']).toBe(0)
     expect(angles['lonely']).toBe(0)
   })
+
+  it('locks share the shaft angle; unlock frees and relocates the layer', () => {
+    let s = initialMachineState()
+    s = place(s, 24, 100, 100, null)
+    const base = s.gears[0]!
+    s = machineReducer(s, {
+      type: 'place',
+      gear: makeGear('layer', 10, base.x, base.y),
+      partnerId: null,
+      lockTo: base.id,
+    })
+
+    // Mutual lock + shared angle.
+    const storedBase = s.gears.find((g) => g.id === base.id)!
+    const layer = s.gears.find((g) => g.id === 'layer')!
+    expect(storedBase.lockedTo).toBe('layer')
+    expect(layer.lockedTo).toBe(storedBase.id)
+    expect(s.angles['layer']).toBe(s.angles[base.id])
+
+    // Unlock relocates the layer and clears both sides.
+    s = machineReducer(s, { type: 'unlock', id: 'layer', x: 500, y: 500, partnerId: null })
+    const freed = s.gears.find((g) => g.id === 'layer')!
+    const plain = s.gears.find((g) => g.id === base.id)!
+    expect(freed.lockedTo).toBeUndefined()
+    expect(plain.lockedTo).toBeUndefined()
+    expect(freed.x).toBe(500)
+  })
 })

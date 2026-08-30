@@ -6,7 +6,7 @@ import { expect, test, type Page } from '@playwright/test'
  * State assertions read the dev-only window.__gears hook.
  */
 
-type GearRecord = { id: string; teeth: number; x: number; y: number }
+type GearRecord = { id: string; teeth: number; x: number; y: number; lockedTo?: string }
 
 // Hook functions must be invoked inside the page: evaluate() cannot serialize
 // functions back across the wire.
@@ -22,6 +22,11 @@ const soundOf = (page: Page) =>
       __gears: { sound: () => { enabled: boolean; audioState: string; meshVoices: number } }
     }).__gears.sound(),
   )
+const gearOf = (page: Page, id: string) =>
+  page.evaluate((gearId) => {
+    const w = window as unknown as { __gears: { gears: () => GearRecord[] } }
+    return w.__gears.gears().find((g) => g.id === gearId) ?? null
+  }, id)
 
 /** Chip centers for each palette size (viewport coordinates). */
 const CHIPS: Record<number, { x: number; y: number }> = {
@@ -78,8 +83,9 @@ test('second gear snaps, meshes, and the inspector reports exact values', async 
 
 test('overlapping drop is refused; nothing is placed', async ({ page }) => {
   await dragChipTo(page, 10, { x: 500, y: 350 })
-  // Drop a 10t straight onto the existing 10t: overlap → shake, no placement.
-  await dragChipTo(page, 10, { x: 500, y: 350 })
+  // Drop a 10t 35px from the base's center: no lock (needs ≤26), no mesh snap
+  // (needs ≥40), teeth interpenetrate → refused with a shake.
+  await dragChipTo(page, 10, { x: 535, y: 350 })
   await page.waitForTimeout(500)
   expect((await gearsOf(page)).length).toBe(1)
 })
@@ -213,6 +219,66 @@ test('machine sound: voices follow meshes, mute persists', async ({ page }) => {
   await expect.poll(async () => (await soundOf(page)).enabled).toBe(false)
   await page.getByRole('button', { name: 'Unmute machine sound' }).click()
   await expect.poll(async () => (await soundOf(page)).enabled).toBe(true)
+})
+
+test('compound gears: drop-on-center locks a pair; unlock frees it', async ({ page }) => {
+  await dragChipTo(page, 10, { x: 500, y: 350 })
+  await expect.poll(async () => (await gearsOf(page)).length).toBe(1)
+  const [base] = await gearsOf(page)
+  const canvas = await page.evaluate(() => {
+    const r = document.querySelector('.machine-canvas')!.getBoundingClientRect()
+    return { x: r.x, y: r.y }
+  })
+
+  // Drop a 24t right onto the base's center: locks, not mesh.
+  await dragChipTo(page, 24, {
+    x: canvas.x + base!.x + 3,
+    y: canvas.y + base!.y + 3,
+  })
+  await expect.poll(async () => (await gearsOf(page)).length).toBe(2)
+
+  const gears = await gearsOf(page)
+  const layer = gears.find((g) => g.id !== base!.id)!
+  expect(layer.lockedTo).toBe(base!.id)
+  const afterBase = await gearOf(page, base!.id)
+  expect(afterBase!.lockedTo).toBe(layer.id)
+  // Co-axial: the layer sits exactly on the shaft.
+  expect(Math.hypot(layer.x - afterBase!.x, layer.y - afterBase!.y)).toBeCloseTo(0, 5)
+
+  // Selecting the pair (smallest gear wins the hit) and unlocking frees both.
+  await page.mouse.click(canvas.x + base!.x, canvas.y + base!.y)
+  const inspector = page.getByRole('complementary', { name: 'Gear inspector' })
+  await expect(inspector).toBeVisible()
+  await inspector.getByRole('button', { name: 'Unlock shaft' }).click()
+  await expect
+    .poll(async () => (await gearOf(page, layer.id))?.lockedTo)
+    .toBeUndefined()
+  await expect
+    .poll(async () => (await gearOf(page, base!.id))?.lockedTo)
+    .toBeUndefined()
+})
+
+test('compound locks persist across reload (schema v2)', async ({ page }) => {
+  await dragChipTo(page, 10, { x: 500, y: 350 })
+  await expect.poll(async () => (await gearsOf(page)).length).toBe(1)
+  const [base] = await gearsOf(page)
+  const canvas = await page.evaluate(() => {
+    const r = document.querySelector('.machine-canvas')!.getBoundingClientRect()
+    return { x: r.x, y: r.y }
+  })
+  await dragChipTo(page, 24, {
+    x: canvas.x + base!.x + 3,
+    y: canvas.y + base!.y + 3,
+  })
+  await expect.poll(async () => (await gearsOf(page)).length).toBe(2)
+  await page.waitForTimeout(700) // let the debounced autosave land
+
+  await page.reload()
+  await page.waitForFunction(() => (window as unknown as { __gears?: unknown }).__gears !== undefined)
+  await expect.poll(async () => (await gearsOf(page)).length).toBe(2)
+  const restored = await gearsOf(page)
+  const restoredLayer = restored.find((g) => g.id !== base!.id)
+  expect(restoredLayer!.lockedTo).toBe(base!.id)
 })
 
 test('reduced motion loads the machine paused with a visible run control', async ({
