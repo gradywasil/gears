@@ -1,0 +1,83 @@
+# The Interlocking Gear Animator
+
+Build a working machine in under a minute: drag gears onto the bench, feel them
+snap into mesh, and watch the whole train come alive at physically accurate
+speeds — with live RPM and torque readouts.
+
+A mechanical sandbox for anyone. No engineering background required; the physics
+is real anyway.
+
+## What you get
+
+- **Snap-to-mesh building** — drag any of eight gear sizes (10–72 teeth) from the
+  tray. A ghost preview shows exactly where it will snap and which gear it will
+  mesh with before you let go.
+- **Physically honest motion** — true involute tooth profiles, phase-correct
+  meshing, speed stepped by exact tooth ratios, direction alternating at every
+  mesh. Impossible placements (collisions, mechanisms that would lock, teeth out
+  of phase) are refused, with a reason.
+- **Live measurements** — click any gear: RPM, torque multiplier, and spin
+  direction, updating as you drag the drive's speed slider (5–120 RPM).
+- **The drive is yours** — the first gear you place drives the machine; make any
+  other gear the drive whenever you like.
+- **Safe to experiment** — undo toasts on every destructive action, arrow-key
+  nudging, full keyboard play (Enter places, Space runs/pauses, Esc closes).
+- **Your bench persists** — continuous autosave plus six named design slots,
+  all in your browser's local storage. No account, no server, works offline
+  once loaded.
+- **Reduced motion respected** — with your OS reduce-motion setting on, the
+  machine loads paused and fully drawn, with a visible play control.
+
+## Quick start
+
+Requires [Node.js](https://nodejs.org) 20+.
+
+```bash
+npm install
+npm run dev
+```
+
+Open the printed URL (default `http://localhost:5173`) and drag a gear in.
+
+### Everything else
+
+```bash
+npm run build     # production build to dist/
+npm run preview   # serve the production build
+npm run check     # typecheck + lint + unit tests
+npm run e2e       # Playwright end-to-end suite (downloads Chromium on first run)
+```
+
+## How it works
+
+Every gear shares one tooth module, so any pair can mesh: radius is a pure
+function of tooth count, and the snap lands at the exact mesh distance. Speeds
+step by the inverse tooth ratio at each mesh (a 10-tooth driving a 20-tooth
+halves the speed and doubles the torque), direction alternates, and each new
+gear's phase is computed so its teeth interlock with partners it touches —
+including multi-gear meshes, which are validated against the current rotation
+phases of every partner before they're allowed.
+
+Rendering is Canvas 2D with per-size sprite caching: each gear size is drawn
+once to an offscreen canvas and rotated cheaply every frame, which is why a
+30-gear train still runs at 60 fps on a modest laptop.
+
+## Keyboard
+
+| Key | Action |
+| --- | --- |
+| `Enter` | place the focused tray gear |
+| `Arrow keys` | nudge the selected gear (`Shift` = larger steps) |
+| `Delete` / `Backspace` | remove the selected gear |
+| `Space` | run / pause the machine |
+| `Esc` | close panels and selection |
+
+## Troubleshooting
+
+- **A drop was refused** — the pill tells you why: no room (teeth would
+  collide), the mechanism would lock (a loop of gears can't all turn), or the
+  teeth are out of phase (multi-mesh drops only work when the phases line up —
+  wait a turn or pause to build).
+- **Nothing spins** — every train needs a drive. If you deleted it, select any
+  gear and choose *Set as drive*.
+- **Lost work?** — the bench autosaves continuously; check the *Saves* panel.
