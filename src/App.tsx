@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react'
 import { benchmarkSeed, startFpsMeter } from './dev/benchmark.ts'
-import { MachineCanvas, type DragState } from './render/MachineCanvas.tsx'
+import { MachineCanvas, type DragState, type MachineProps as MachineCanvasProps } from './render/MachineCanvas.tsx'
 import { makeGear } from './sim/gear.ts'
 import { solveTrain } from './sim/kinematics.ts'
-import { evaluatePlacement } from './sim/placement.ts'
+import { evaluatePlacement, refusalLabel } from './sim/placement.ts'
 import { initialMachineState, machineReducer } from './state/machine.ts'
-import { AUTOSAVE_KEY, loadSave, makeEnvelope, writeSave } from './state/persistence.ts'
+import { AUTOSAVE_KEY, SLOT_KEYS, loadSave, makeEnvelope, writeSave } from './state/persistence.ts'
 import { Controls } from './ui/Controls.tsx'
 import { Inspector } from './ui/Inspector.tsx'
 import { Saves } from './ui/Saves.tsx'
@@ -38,13 +38,51 @@ export function App() {
   const [state, dispatch] = useReducer(machineReducer, undefined, initialMachineState)
   const [drag, setDrag] = useState<DragState>(null)
   const [savesOpen, setSavesOpen] = useState(false)
-  const [toast, setToast] = useState<string | null>(null)
+  const [toast, setToast] = useState<{ message: string; undo?: () => void } | null>(null)
+  const [pulse, setPulse] = useState<MachineCanvasProps['pulse']>(null)
+  const [liveRefusal, setLiveRefusal] = useState<string | null>(null)
+  const [shortcutsOpen, setShortcutsOpen] = useState(false)
   const hydrated = useRef(false)
   const runningRef = useRef(initialRunning())
   const setRunning = useCallback((value: boolean) => {
     runningRef.current = value
     dispatch({ type: 'setRunning', value })
   }, [])
+
+  /** Snapshot the whole machine (angles included) for one-step Undo. */
+  const designSnapshot = useCallback(() => {
+    return {
+      gears: state.gears,
+      angles: state.angles,
+      driveId: state.driveId,
+      rpm: state.rpm,
+    }
+  }, [state])
+  const restoreSnapshot = useCallback((snapshot: ReturnType<typeof designSnapshot>) => {
+    // Hydrate recomputes phases from geometry — consistent by construction.
+    dispatch({
+      type: 'hydrate',
+      gears: snapshot.gears,
+      driveId: snapshot.driveId,
+      rpm: snapshot.rpm,
+      running: runningRef.current,
+    })
+  }, [])
+
+  const deleteGear = useCallback(
+    (id: string) => {
+      const snapshot = designSnapshot()
+      dispatch({ type: 'delete', id })
+      setToast({
+        message: 'Gear deleted',
+        undo: () => {
+          restoreSnapshot(snapshot)
+          setToast(null)
+        },
+      })
+    },
+    [designSnapshot, restoreSnapshot],
+  )
 
   // --- Hydrate from autosave once (T12). Angles realign from the drive.
   useEffect(() => {
@@ -118,14 +156,14 @@ export function App() {
         AUTOSAVE_KEY,
         makeEnvelope(state.gears, state.driveId, state.rpm),
       )
-      if (result === 'quota') setToast('Couldn’t save — browser storage is full.')
+      if (result === 'quota') setToast({ message: 'Couldn’t save — browser storage is full.' })
     }, 500)
     return () => window.clearTimeout(timer)
   }, [state.gears, state.driveId, state.rpm])
 
   useEffect(() => {
     if (!toast) return
-    const timer = window.setTimeout(() => setToast(null), 3500)
+    const timer = window.setTimeout(() => setToast(null), toast.undo ? 6000 : 3500)
     return () => window.clearTimeout(timer)
   }, [toast])
 
@@ -146,12 +184,22 @@ export function App() {
     return () => window.removeEventListener('pointerup', end)
   }, [drag])
 
-  // Keyboard: delete the selection, nudge it (Shift = larger steps).
+  // Keyboard: Esc closes overlays, Space runs/pauses, Delete removes, arrows nudge.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLInputElement) return
+      if (e.key === 'Escape') {
+        if (savesOpen) setSavesOpen(false)
+        else if (state.selectedId) dispatch({ type: 'select', id: null })
+        return
+      }
+      if (e.code === 'Space' && !(e.target instanceof HTMLButtonElement)) {
+        e.preventDefault()
+        toggleRun()
+        return
+      }
       if ((e.key === 'Delete' || e.key === 'Backspace') && state.selectedId) {
-        dispatch({ type: 'delete', id: state.selectedId })
+        deleteGear(state.selectedId)
         return
       }
       const nudges: Record<string, [number, number]> = {
@@ -182,11 +230,14 @@ export function App() {
           y: verdict.y,
           partnerId: verdict.partner?.id ?? null,
         })
+      } else if (verdict.reason !== 'ok') {
+        setPulse({ x: gear.x, y: gear.y, teeth: gear.teeth, reason: verdict.reason, at: Date.now() })
+        setLiveRefusal(refusalLabel(verdict.reason))
       }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [state.selectedId, state.gears, state.angles])
+  }, [state.selectedId, state.gears, state.angles, savesOpen, deleteGear, toggleRun])
 
   const onPlace = useCallback(
     (teeth: number, x: number, y: number, partnerId: string | null) => {
@@ -200,8 +251,45 @@ export function App() {
     },
     [],
   )
-  const onSelect = useCallback((id: string | null) => dispatch({ type: 'select', id }), [])
+  const onSelect = useCallback((id: string | null) => {
+    setLiveRefusal(null)
+    dispatch({ type: 'select', id })
+  }, [])
   const onStartMove = useCallback((id: string, teeth: number) => setDrag({ kind: 'move', id, teeth }), [])
+
+  /**
+   * Keyboard placement (critique adapt): place a gear from the tray at the
+   * canvas center, spiraling outward until a valid spot (or snap) is found.
+   */
+  const placeFromTrayActivate = useCallback(
+    (teeth: number) => {
+      const canvas = document.querySelector('.machine-canvas') as HTMLCanvasElement | null
+      if (!canvas) return
+      const rect = canvas.getBoundingClientRect()
+      const cx = rect.width / 2
+      const cy = rect.height / 2
+      const angles = new Map(Object.entries(state.angles))
+      for (const r of [0, 90, 180, 270, 380]) {
+        const steps = r === 0 ? 1 : 8
+          for (let i = 0; i < steps; i++) {
+          const a = (i / steps) * 2 * Math.PI + (r === 0 ? 0 : Math.PI / 8)
+          const x = cx + r * Math.cos(a)
+          const y = cy + r * Math.sin(a)
+          const verdict = evaluatePlacement(state.gears, teeth, x, y, undefined, angles)
+          if (verdict.valid) {
+            dispatch({
+              type: 'place',
+              gear: makeGear(crypto.randomUUID(), teeth, verdict.x, verdict.y),
+              partnerId: verdict.partner?.id ?? null,
+            })
+            return
+          }
+        }
+      }
+      setToast({ message: 'No room on the bench for that gear.' })
+    },
+    [state.gears, state.angles],
+  )
 
   const running = state.running
 
@@ -242,6 +330,18 @@ export function App() {
         <div className="top-bar-actions">
           <button
             type="button"
+            className="icon-button"
+            onClick={() => setShortcutsOpen((v) => !v)}
+            aria-expanded={shortcutsOpen}
+            aria-label="Keyboard shortcuts"
+          >
+            <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true">
+              <path d="M9.4 9.2a2.9 2.9 0 1 1 4.4 2.5c-.9.6-1.8 1.1-1.8 2.3" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+              <circle cx="12" cy="17.6" r="0.9" fill="currentColor" />
+            </svg>
+          </button>
+          <button
+            type="button"
             className="secondary-button"
             onClick={() => setSavesOpen((v) => !v)}
             aria-expanded={savesOpen}
@@ -258,7 +358,11 @@ export function App() {
         </div>
       </header>
       <div className="workbench">
-        <Tray disabled={driveMissing} onStartDrag={(teeth) => setDrag({ kind: 'new', teeth })} />
+        <Tray
+          disabled={driveMissing}
+          onStartDrag={(teeth) => setDrag({ kind: 'new', teeth })}
+          onActivate={placeFromTrayActivate}
+        />
         <main className="canvas-holder">
           <MachineCanvas
             gears={state.gears}
@@ -276,16 +380,35 @@ export function App() {
             onSelect={onSelect}
             onStartMove={onStartMove}
             onDragEnd={() => setDrag(null)}
+            pulse={pulse}
+            onRefusal={(reason) => setLiveRefusal(refusalLabel(reason))}
+            ariaLabel={`Gear train canvas. ${state.gears.length} gear${state.gears.length === 1 ? '' : 's'}${state.driveId && running ? `, spinning at ${state.rpm} RPM drive speed` : ''}.`}
           />
+          <div className="sr-only" aria-live="polite">
+            {liveRefusal
+              ? liveRefusal
+              : selected
+                ? selected.id === state.driveId
+                  ? `Drive gear selected: ${selected.teeth} teeth at ${state.rpm} RPM.`
+                  : spins.has(selected.id)
+                    ? `Selected ${selected.teeth}-tooth gear: ${spins.get(selected.id)!.rpm.toFixed(1)} RPM, ×${spins.get(selected.id)!.torqueMultiplier.toFixed(1)} torque.`
+                    : `Selected ${selected.teeth}-tooth gear: stationary.`
+                : ''}
+          </div>
           {state.gears.length === 0 && (
             <div className="first-run">
               <p>Drag a gear from the tray onto the bench.</p>
-              <p className="dim">The first gear becomes the drive.</p>
+              <p className="dim">Or focus a tray gear and press Enter. The first gear becomes the drive.</p>
             </div>
           )}
           {driveMissing && (
             <div className="drive-missing" role="status">
               The drive gear was removed. Click a gear and choose <strong>Set as drive</strong>.
+            </div>
+          )}
+          {state.driveId !== null && !running && !driveMissing && (
+            <div className="paused-pill mono" role="status">
+              Paused
             </div>
           )}
           {selected && (
@@ -294,7 +417,7 @@ export function App() {
               spin={spins.get(selected.id) ?? null}
               isDrive={selected.id === state.driveId}
               onSetDrive={() => dispatch({ type: 'setDrive', id: selected.id })}
-              onDelete={() => dispatch({ type: 'delete', id: selected.id })}
+              onDelete={() => deleteGear(selected.id)}
               onClose={() => dispatch({ type: 'select', id: null })}
             />
           )}
@@ -303,7 +426,8 @@ export function App() {
             gears={state.gears}
             driveId={state.driveId}
             rpm={state.rpm}
-            onRestore={(envelope) =>
+            onRestore={(envelope) => {
+              const snapshot = designSnapshot()
               dispatch({
                 type: 'hydrate',
                 gears: envelope.gears.map((g) => makeGear(g.id, g.teeth, g.x, g.y)),
@@ -311,13 +435,69 @@ export function App() {
                 rpm: envelope.rpm,
                 running: running,
               })
-            }
+              setToast({
+                message: 'Design restored',
+                undo: () => {
+                  restoreSnapshot(snapshot)
+                  setToast(null)
+                },
+              })
+            }}
             onClose={() => setSavesOpen(false)}
-            onQuota={() => setToast('Couldn’t save — browser storage is full.')}
+            onQuota={() => setToast({ message: 'Couldn’t save — browser storage is full.' })}
+            onSlotSaved={(index, previous) => {
+              if (!previous) return
+              setToast({
+                message: `Slot ${index + 1} updated`,
+                undo: () => {
+                  writeSave(localStorage, SLOT_KEYS[index]!, previous)
+                  setToast(null)
+                },
+              })
+            }}
+            onSlotDeleted={(index, envelope) => {
+              setToast({
+                message: `Slot ${index + 1} deleted`,
+                undo: () => {
+                  writeSave(localStorage, SLOT_KEYS[index]!, envelope)
+                  setToast(null)
+                },
+              })
+            }}
           />
+          {shortcutsOpen && (
+            <section className="shortcuts-panel" aria-label="Keyboard shortcuts">
+              <header>
+                <h2>Shortcuts</h2>
+                <button type="button" className="icon-button" onClick={() => setShortcutsOpen(false)} aria-label="Close shortcuts">
+                  <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+                    <path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                  </svg>
+                </button>
+              </header>
+              <dl>
+                <div><dt>Enter</dt><dd>place the focused tray gear</dd></div>
+                <div><dt>Drag</dt><dd>place or re-mesh a gear</dd></div>
+                <div><dt>Arrow keys</dt><dd>nudge the selected gear</dd></div>
+                <div><dt>Shift + arrows</dt><dd>nudge farther</dd></div>
+                <div><dt>Delete</dt><dd>remove the selected gear</dd></div>
+                <div><dt>Space</dt><dd>run / pause the machine</dd></div>
+                <div><dt>Esc</dt><dd>close panels and selection</dd></div>
+              </dl>
+            </section>
+          )}
           {toast && (
             <div className="toast" role="status">
-              {toast}
+              <span>{toast.message}</span>
+              {toast.undo && (
+                <button
+                  type="button"
+                  className="toast-undo"
+                  onClick={toast.undo}
+                >
+                  Undo
+                </button>
+              )}
             </div>
           )}
         </main>

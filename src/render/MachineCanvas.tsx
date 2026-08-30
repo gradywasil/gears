@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react'
 import type { Gear } from '../sim/gear.ts'
 import { gearOuterRadius } from './involute.ts'
 import type { Spin } from '../sim/kinematics.ts'
-import { evaluatePlacement, type PlacementVerdict } from '../sim/placement.ts'
+import { evaluatePlacement, refusalLabel, type PlacementVerdict } from '../sim/placement.ts'
 import { gearSprite } from './spriteCache.ts'
 
 export type DragState =
@@ -26,9 +26,15 @@ export type MachineProps = {
   onSelect: (id: string | null) => void
   onStartMove: (id: string, teeth: number) => void
   onDragEnd: () => void
+  /** Screen-reader description of the machine state. */
+  ariaLabel: string
+  /** Refusal feedback triggered outside the canvas (failed keyboard nudge). */
+  pulse?: { x: number; y: number; teeth: number; reason: 'overlap' | 'jam' | 'phase'; at: number } | null
+  /** Announces a refusal to assistive tech (aria-live lives in App). */
+  onRefusal?: (reason: 'overlap' | 'jam' | 'phase') => void
 }
 
-const REFUSE_MS = 300
+const REFUSE_MS = 2200 // label needs reading time; oscillation fades in the first 300ms
 
 /**
  * The machine canvas. The rAF loop lives outside React (R2): React renders the
@@ -43,7 +49,25 @@ export function MachineCanvas(props: MachineProps) {
   })
 
   const dragPosRef = useRef<{ x: number; y: number; inside: boolean } | null>(null)
-  const shakeRef = useRef<{ x: number; y: number; teeth: number; until: number } | null>(null)
+  const shakeRef = useRef<{
+    x: number
+    y: number
+    teeth: number
+    reason: 'overlap' | 'jam' | 'phase'
+    until: number
+  } | null>(null)
+
+  // External refusal pulses (failed keyboard nudges) trigger the same feedback.
+  useEffect(() => {
+    if (!props.pulse) return
+    shakeRef.current = {
+      x: props.pulse.x,
+      y: props.pulse.y,
+      teeth: props.pulse.teeth,
+      reason: props.pulse.reason,
+      until: performance.now() + REFUSE_MS,
+    }
+  }, [props.pulse?.at])
 
   useEffect(() => {
     const canvas = canvasRef.current!
@@ -167,28 +191,52 @@ export function MachineCanvas(props: MachineProps) {
 
       drawGhost()
 
-      // Refusal feedback: a brief shake at the refused spot.
+      // Refusal feedback: a brief shake that settles into a labeled ghost.
       const shake = shakeRef.current
       if (shake) {
         if (now >= shake.until) {
           shakeRef.current = null
         } else {
-          const t = (shake.until - now) / REFUSE_MS
-          const offset = Math.sin(now * 0.09) * 4 * t
+          const elapsed = REFUSE_MS - (shake.until - now)
+          const oscillating = Math.max(0, 1 - elapsed / 300)
+          const offset = Math.sin(elapsed * 0.06) * 4 * oscillating
+          const fade = Math.min(1, (shake.until - now) / 400)
           const sprite = gearSprite(shake.teeth, dpr)
           const half = sprite.width / (2 * dpr)
           ctx.save()
-          ctx.globalAlpha = 0.4
+          ctx.globalAlpha = 0.35 * fade
           ctx.translate(shake.x + offset, shake.y)
           ctx.drawImage(sprite, -half, -half, half * 2, half * 2)
           ctx.restore()
           ctx.save()
+          ctx.globalAlpha = fade
           ctx.strokeStyle = propsRef.current.danger
           ctx.lineWidth = 2
           ctx.setLineDash([6, 5])
           ctx.beginPath()
           ctx.arc(shake.x + offset, shake.y, gearOuterRadius(shake.teeth) + 5, 0, 2 * Math.PI)
           ctx.stroke()
+          ctx.restore()
+
+          // The reason, in a danger pill above the refused spot.
+          const label = refusalLabel(shake.reason)
+          ctx.save()
+          ctx.globalAlpha = fade
+          ctx.font = '600 12px ui-sans-serif, system-ui, sans-serif'
+          ctx.textAlign = 'center'
+          ctx.textBaseline = 'middle'
+          const textW = ctx.measureText(label).width
+          const pillW = textW + 20
+          const pillH = 22
+          let lx = shake.x
+          lx = Math.max(pillW / 2 + 8, Math.min(cssW - pillW / 2 - 8, lx))
+          const ly = Math.max(pillH, shake.y - gearOuterRadius(shake.teeth) - 20)
+          ctx.fillStyle = propsRef.current.danger
+          ctx.beginPath()
+          ctx.roundRect(lx - pillW / 2, ly - pillH / 2, pillW, pillH, pillH / 2)
+          ctx.fill()
+          ctx.fillStyle = '#fff'
+          ctx.fillText(label, lx, ly)
           ctx.restore()
         }
       }
@@ -261,7 +309,15 @@ export function MachineCanvas(props: MachineProps) {
         if (drag.kind === 'new') onPlace(drag.teeth, verdict.x, verdict.y, verdict.partner?.id ?? null)
         else onMove(drag.id, verdict.x, verdict.y, verdict.partner?.id ?? null)
       } else {
-        shakeRef.current = { x: verdict.x, y: verdict.y, teeth: drag.teeth, until: performance.now() + REFUSE_MS }
+        const reason = verdict.reason === 'ok' ? 'overlap' : verdict.reason
+        shakeRef.current = {
+          x: verdict.x,
+          y: verdict.y,
+          teeth: drag.teeth,
+          reason,
+          until: performance.now() + REFUSE_MS,
+        }
+        propsRef.current.onRefusal?.(reason)
       }
       onDragEnd()
       dragPosRef.current = null
@@ -282,5 +338,5 @@ export function MachineCanvas(props: MachineProps) {
     }
   }, [])
 
-  return <canvas ref={canvasRef} className="machine-canvas" />
+  return <canvas ref={canvasRef} className="machine-canvas" role="img" aria-label={props.ariaLabel} />
 }

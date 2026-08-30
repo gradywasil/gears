@@ -13,8 +13,9 @@ export function Controls({ rpm, running, hasDrive, onRpmChange, onToggleRun }: C
         type="button"
         className="icon-button run-button"
         onClick={onToggleRun}
+        disabled={!hasDrive}
         aria-label={running ? 'Pause machine' : 'Run machine'}
-        aria-pressed={running}
+        aria-pressed={running && hasDrive}
       >
         {running ? (
           <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">

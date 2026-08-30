@@ -6,11 +6,22 @@ import { gearSprite } from '../render/spriteCache.ts'
 export type TrayProps = {
   disabled: boolean
   onStartDrag: (teeth: number) => void
+  /** Keyboard path: Enter/Space (or a click that never became a drag) places this gear. */
+  onActivate: (teeth: number) => void
 }
 
 /** A palette chip: the real gear sprite, scaled down — what you drag is what you get. */
-function TrayChip({ teeth, onStartDrag }: { teeth: number; onStartDrag: (t: number) => void }) {
+function TrayChip({
+  teeth,
+  onStartDrag,
+  onActivate,
+}: {
+  teeth: number
+  onStartDrag: (t: number) => void
+  onActivate: (t: number) => void
+}) {
   const ref = useRef<HTMLCanvasElement>(null)
+  const leftChip = useRef(false)
 
   useEffect(() => {
     const canvas = ref.current!
@@ -30,8 +41,19 @@ function TrayChip({ teeth, onStartDrag }: { teeth: number; onStartDrag: (t: numb
     <button
       type="button"
       className="tray-chip"
-      onPointerDown={() => onStartDrag(teeth)}
+      onPointerDown={() => {
+        leftChip.current = false
+        onStartDrag(teeth)
+      }}
+      onPointerLeave={() => {
+        leftChip.current = true
+      }}
+      onClick={() => {
+        // A click that never became a drag (keyboard Enter/Space, or a tap in place).
+        if (!leftChip.current) onActivate(teeth)
+      }}
       aria-label={`Add ${teeth}-tooth gear`}
+      aria-keyshortcuts="Enter"
     >
       <canvas ref={ref} width={56} height={56} aria-hidden="true" />
       <span className="tray-chip-label">{teeth}</span>
@@ -39,11 +61,11 @@ function TrayChip({ teeth, onStartDrag }: { teeth: number; onStartDrag: (t: numb
   )
 }
 
-export function Tray({ disabled, onStartDrag }: TrayProps) {
+export function Tray({ disabled, onStartDrag, onActivate }: TrayProps) {
   return (
     <nav className="tray" aria-label="Gear palette" data-disabled={disabled || undefined}>
       {PALETTE.map((teeth) => (
-        <TrayChip key={teeth} teeth={teeth} onStartDrag={onStartDrag} />
+        <TrayChip key={teeth} teeth={teeth} onStartDrag={onStartDrag} onActivate={onActivate} />
       ))}
     </nav>
   )

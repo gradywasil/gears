@@ -64,9 +64,10 @@ test('second gear snaps, meshes, and the inspector reports exact values', async 
   expect(Math.hypot(b.x - a.x, b.y - a.y)).toBeCloseTo(102, 5)
 
   // Last placed is selected: inspector shows 12.5 RPM and ×2.4 from 30 RPM.
-  await expect(page.getByRole('complementary', { name: 'Gear inspector' })).toBeVisible()
-  await expect(page.getByText('12.5 RPM')).toBeVisible()
-  await expect(page.getByText('×2.4')).toBeVisible()
+  const inspector = page.getByRole('complementary', { name: 'Gear inspector' })
+  await expect(inspector).toBeVisible()
+  await expect(inspector.getByText('12.5 RPM')).toBeVisible()
+  await expect(inspector.getByText('×2.4')).toBeVisible()
 })
 
 test('overlapping drop is refused; nothing is placed', async ({ page }) => {
@@ -91,13 +92,13 @@ test('deleting the drive prompts for a new one; Set as drive recovers', async ({
   await inspector.getByRole('button', { name: 'Delete' }).click()
 
   await expect.poll(async () => driveIdOf(page)).toBe(null)
-  await expect(page.getByRole('status')).toContainText('Set as drive')
+  await expect(page.locator('.drive-missing')).toContainText('Set as drive')
 
   // Recover: select the remaining 24t and make it the drive.
   await page.mouse.click(610, 350)
   await inspector.getByRole('button', { name: 'Set as drive' }).click()
   await expect.poll(async () => driveIdOf(page)).not.toBe(null)
-  await expect(page.getByRole('status')).toHaveCount(0)
+  await expect(page.locator('.drive-missing')).toHaveCount(0)
 })
 
 test('saves round-trip: save slot, reload, design restored', async ({ page }) => {
@@ -136,6 +137,45 @@ test('saves round-trip: save slot, reload, design restored', async ({ page }) =>
     .first()
     .click()
   await expect.poll(async () => (await gearsOf(page)).length).toBe(2)
+})
+
+test('deleting a gear is undoable from the toast', async ({ page }) => {
+  await dragChipTo(page, 10, { x: 500, y: 350 })
+  await expect.poll(async () => (await gearsOf(page)).length).toBe(1)
+
+  await page.mouse.click(500, 350)
+  const inspector = page.getByRole('complementary', { name: 'Gear inspector' })
+  await expect(inspector).toBeVisible()
+  await inspector.getByRole('button', { name: 'Delete' }).click()
+
+  await expect.poll(async () => (await gearsOf(page)).length).toBe(0)
+  const undo = page.getByRole('button', { name: 'Undo' })
+  await expect(undo).toBeVisible()
+  await undo.click()
+
+  await expect.poll(async () => (await gearsOf(page)).length).toBe(1)
+  expect(await driveIdOf(page)).not.toBe(null)
+})
+
+test('keyboard placement works from the tray; Esc closes the saves panel', async ({ page }) => {
+  // Focus the first tray chip and press Enter — a gear lands on the bench.
+  await page.getByRole('button', { name: 'Add 10-tooth gear' }).focus()
+  await page.keyboard.press('Enter')
+  await expect.poll(async () => (await gearsOf(page)).length).toBe(1)
+  expect(await driveIdOf(page)).not.toBe(null)
+
+  // Space toggles the machine (focus moved off the button — Space activates buttons natively).
+  await page.mouse.click(200, 150)
+  await page.keyboard.press('Space')
+  await expect.poll(async () => runningOf(page)).toBe(false)
+  await page.keyboard.press('Space')
+  await expect.poll(async () => runningOf(page)).toBe(true)
+
+  // Esc closes the saves panel.
+  await page.getByRole('button', { name: 'Saves' }).click()
+  await expect(page.getByRole('region', { name: 'Saved designs' })).toBeVisible()
+  await page.keyboard.press('Escape')
+  await expect(page.getByRole('region', { name: 'Saved designs' })).toHaveCount(0)
 })
 
 test('reduced motion loads the machine paused with a visible run control', async ({

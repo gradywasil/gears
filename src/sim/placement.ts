@@ -28,6 +28,13 @@ export const SNAP_RANGE = 20
 /** Allowed phase misalignment for secondary meshes, as a fraction of tooth pitch. */
 const PHASE_TOLERANCE = 1 / 6
 
+/** Plain-language refusal copy (critique clarify): five words, names the problem. */
+export function refusalLabel(reason: 'overlap' | 'jam' | 'phase'): string {
+  if (reason === 'overlap') return 'No room — gears would collide'
+  if (reason === 'jam') return 'Would lock the mechanism'
+  return 'Teeth out of phase — wait a turn'
+}
+
 export type PlacementVerdict = {
   /** Final position for the ghost / drop. */
   x: number

@@ -1,0 +1,138 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-08-29T18:00:00.000Z",
+  "title": "Design System: The Interlocking Gear Animator",
+  "extensions": {
+    "colorMeta": {
+      "signal-orange": {
+        "role": "primary",
+        "displayName": "Signal Orange",
+        "canonical": "#C63D0F",
+        "tonalRamp": [
+          "#3B1205", "#5A1D0C", "#7A290F", "#9C340F", "#C63D0F", "#D96540", "#E89570", "#F3C4AC"
+        ]
+      },
+      "bench-paper": {
+        "role": "neutral",
+        "displayName": "Bench Paper",
+        "canonical": "#ECE9E2",
+        "tonalRamp": [
+          "#2A2824", "#57534B", "#837E74", "#ADA79B", "#CFCABF", "#ECE9E2", "#F2F0EA", "#F8F7F3"
+        ]
+      },
+      "steel-lightest": {
+        "role": "neutral",
+        "displayName": "Steel Lightest (10t)",
+        "canonical": "#C2C7CD",
+        "tonalRamp": [
+          "#26292D", "#4A5058", "#6E7681", "#959DA9", "#B3B9C1", "#C2C7CD", "#D6DADE", "#E8EAEC"
+        ]
+      },
+      "steel-darkest": {
+        "role": "neutral",
+        "displayName": "Steel Darkest (72t)",
+        "canonical": "#5B6570",
+        "tonalRamp": [
+          "#161A1E", "#2C333A", "#424B54", "#5B6570", "#78838E", "#96A0AA", "#B8C0C8", "#D7DCE1"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "numeric": {
+        "displayName": "Instrument Numerals",
+        "purpose": "Every live measurement (RPM, torque, dates); tabular so digits don't dance."
+      },
+      "title": { "displayName": "Title", "purpose": "App name in the top bar." }
+    },
+    "shadows": [
+      {
+        "name": "panel-lift",
+        "value": "0 1px 2px rgba(32,29,25,0.08), 0 4px 14px rgba(32,29,25,0.1)",
+        "purpose": "The single structural shadow: floating panels, toast, hovered tray chips."
+      }
+    ],
+    "motion": [
+      {
+        "name": "control-response",
+        "value": "120ms ease-out (border-color, background-color)",
+        "purpose": "Quiet control-state transitions. The machine's rotation is the only motion that matters."
+      }
+    ],
+    "breakpoints": [
+      { "name": "tray-bottom", "value": "720px", "purpose": "Below this the tray rail becomes a bottom row." }
+    ]
+  },
+  "components": [
+    {
+      "name": "Secondary Button",
+      "kind": "button",
+      "refersTo": "button-secondary",
+      "description": "Default quiet action (Save, Set as drive, Saves toggle).",
+      "html": "<button class=\"ds-btn-secondary\">Set as drive</button>",
+      "css": ".ds-btn-secondary { font: 400 0.78rem ui-sans-serif, system-ui, sans-serif; color: #201D19; background: #FBFAF7; border: 1px solid #B9B2A3; border-radius: 999px; padding: 5px 12px; cursor: pointer; transition: border-color 120ms ease-out; } .ds-btn-secondary:hover { border-color: #C63D0F; color: #C63D0F; } .ds-btn-secondary:focus-visible { outline: 2px solid #C63D0F; outline-offset: 2px; }"
+    },
+    {
+      "name": "Run Control",
+      "kind": "button",
+      "refersTo": "button-icon-run",
+      "description": "The one colored control: pause/run owns the machine's state.",
+      "html": "<button class=\"ds-run\" aria-pressed=\"true\"><svg viewBox=\"0 0 24 24\" width=\"16\" height=\"16\"><path d=\"M8 5v14M16 5v14\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2.4\" stroke-linecap=\"round\"/></svg></button>",
+      "css": ".ds-run { display: grid; place-items: center; width: 32px; height: 32px; border-radius: 999px; border: 1px solid #B9B2A3; background: #FBFAF7; color: #201D19; cursor: pointer; transition: background 120ms ease-out; } .ds-run[aria-pressed='true'] { background: #C63D0F; border-color: #C63D0F; color: #fff; } .ds-run:focus-visible { outline: 2px solid #C63D0F; outline-offset: 2px; }"
+    },
+    {
+      "name": "Floating Panel",
+      "kind": "card",
+      "refersTo": "panel-floating",
+      "description": "Inspector / saves card: hairline-bordered, structural shadow.",
+      "html": "<div class=\"ds-panel\"><h2>24-tooth gear</h2><p class=\"ds-stat\">Speed <span class=\"ds-num\">12.5 RPM</span></p></div>",
+      "css": ".ds-panel { width: 240px; background: #FBFAF7; border: 1px solid #D8D3C8; border-radius: 14px; box-shadow: 0 1px 2px rgba(32,29,25,0.08), 0 4px 14px rgba(32,29,25,0.1); padding: 14px 16px; color: #201D19; } .ds-panel h2 { margin: 0 0 10px; font: 600 0.9rem ui-sans-serif, system-ui, sans-serif; } .ds-stat { margin: 0; font: 400 0.88rem ui-sans-serif, system-ui, sans-serif; display: flex; justify-content: space-between; border-bottom: 1px solid #D8D3C8; padding-bottom: 8px; } .ds-num { font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace; font-variant-numeric: tabular-nums; }"
+    },
+    {
+      "name": "Drive Badge",
+      "kind": "chip",
+      "refersTo": "badge-drive",
+      "description": "Marks the drive gear in the inspector.",
+      "html": "<span class=\"ds-badge\">Drive</span>",
+      "css": ".ds-badge { display: inline-block; padding: 4px 10px; border-radius: 999px; background: #C63D0F; color: #fff; font: 600 0.74rem ui-sans-serif, system-ui, sans-serif; letter-spacing: 0.02em; }"
+    },
+    {
+      "name": "Slot Input",
+      "kind": "input",
+      "refersTo": "input-slot-name",
+      "description": "Save-slot name field.",
+      "html": "<input class=\"ds-input\" type=\"text\" placeholder=\"Design 1\" />",
+      "css": ".ds-input { font: 400 0.78rem ui-sans-serif, system-ui, sans-serif; color: #201D19; background: #F4F2EC; border: 1px solid #D8D3C8; border-radius: 8px; padding: 4px 8px; } .ds-input::placeholder { color: #6E675C; } .ds-input:focus-visible { outline: 2px solid #C63D0F; outline-offset: 2px; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Clockmaker's Bench",
+    "overview": "A warm paper bench under even studio light; mechanisms of quiet steel; one maker's-mark orange reserved for state. The system practices restraint as a material — hairline borders instead of heavy chrome, a single soft shadow where something genuinely lifts off the bench, and numerals treated as instruments. The machine on the canvas is the only spectacle; everything else is a tool that recedes while you work.",
+    "keyCharacteristics": [
+      "Warm paper ground with cool steel mechanisms and exactly one accent",
+      "Hairline borders carry structure; a single offset shadow carries lift",
+      "Monospaced tabular numerals for every measurement; sans chrome everywhere else",
+      "Size reads as meaning: the steel ramp darkens with tooth count (small = fast = light)",
+      "The canvas is the instrument; chrome hugs the edges"
+    ],
+    "rules": [
+      { "name": "The One Mark Rule", "body": "Signal Orange appears only where state lives (drive, selection, active, focus). If it decorates, it's wrong.", "section": "colors" },
+      { "name": "The Bench Rule", "body": "The canvas ground is only broken by hairline-bordered floating panels, prompts, and toasts.", "section": "colors" },
+      { "name": "The Instrument Numeral Rule", "body": "Any number that can change while watched is set in the mono tabular face.", "section": "typography" },
+      { "name": "The Lift Rule", "body": "A shadow means 'this floats above the bench'. Nothing else is elevated — hairlines do the structural work.", "section": "elevation" }
+    ],
+    "dos": [
+      "Do keep exactly one accent and spend it only on state.",
+      "Do set every live number in mono tabular numerals.",
+      "Do darken steel with size — the ramp is meaning, not decoration.",
+      "Do draw chrome at the edges and let the canvas own the middle.",
+      "Do use hairlines for structure and the single shadow for lift."
+    ],
+    "donts": [
+      "Don't introduce a second accent color or decorative gradients.",
+      "Don't shadow anything that doesn't float above the bench.",
+      "Don't use rounded-rectangle stand-ins for mechanisms — gears are circles with true teeth.",
+      "Don't animate chrome; the machine's rotation is the page's only motion.",
+      "Don't style numbers in the proportional sans face."
+    ]
+  }
+}

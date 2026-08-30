@@ -1,7 +1,15 @@
 import { describe, expect, it } from 'vitest'
 import { makeGear, radiusOf, tipRadiusOf } from './gear.ts'
-import { evaluatePlacement } from './placement.ts'
+import { evaluatePlacement, refusalLabel } from './placement.ts'
 import { meshedTheta } from './phase.ts'
+
+describe('refusal labels', () => {
+  it('name each refusal cause in plain language', () => {
+    expect(refusalLabel('overlap')).toBe('No room — gears would collide')
+    expect(refusalLabel('jam')).toBe('Would lock the mechanism')
+    expect(refusalLabel('phase')).toBe('Teeth out of phase — wait a turn')
+  })
+})
 
 describe('placement evaluation', () => {
   it('snaps a nearby cursor to the exact mesh distance', () => {
