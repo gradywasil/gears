@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react'
+import { SoundEngine, type MeshVoice, meshPitchHz, persistSoundPref, storedSoundPref } from './audio/engine.ts'
 import { benchmarkSeed, startFpsMeter } from './dev/benchmark.ts'
 import { MachineCanvas, type DragState, type MachineProps as MachineCanvasProps } from './render/MachineCanvas.tsx'
 import { makeGear } from './sim/gear.ts'
 import { solveTrain } from './sim/kinematics.ts'
 import { evaluatePlacement, refusalLabel } from './sim/placement.ts'
+import { meshedPairs } from './sim/mesh.ts'
 import { initialMachineState, machineReducer } from './state/machine.ts'
 import { AUTOSAVE_KEY, SLOT_KEYS, loadSave, makeEnvelope, writeSave } from './state/persistence.ts'
 import { Controls } from './ui/Controls.tsx'
@@ -42,6 +44,26 @@ export function App() {
   const [pulse, setPulse] = useState<MachineCanvasProps['pulse']>(null)
   const [liveRefusal, setLiveRefusal] = useState<string | null>(null)
   const [shortcutsOpen, setShortcutsOpen] = useState(false)
+  const [soundOn, setSoundOn] = useState(() => storedSoundPref() ?? true)
+
+  const engineRef = useRef<SoundEngine | null>(null)
+  const sound = () => (engineRef.current ??= new SoundEngine())
+
+  // Autoplay rules: create/resume the AudioContext on the first user gesture.
+  useEffect(() => {
+    const arm = () => sound().ensureContext()
+    window.addEventListener('pointerdown', arm, { once: true })
+    window.addEventListener('keydown', arm, { once: true })
+    return () => {
+      window.removeEventListener('pointerdown', arm)
+      window.removeEventListener('keydown', arm)
+    }
+  }, [])
+
+  useEffect(() => {
+    sound().setEnabled(soundOn)
+    persistSoundPref(soundOn)
+  }, [soundOn])
   const hydrated = useRef(false)
   const runningRef = useRef(initialRunning())
   const setRunning = useCallback((value: boolean) => {
@@ -172,6 +194,23 @@ export function App() {
     [state.gears, state.driveId, state.rpm],
   )
 
+  // One voice per mesh (tooth-pass rate is a property of the contact: N·ω is
+  // conserved across a mesh, so either gear gives the same rate).
+  const meshVoices = useMemo(() => {
+    const voices = new Map<string, MeshVoice>()
+    for (const [a, b] of meshedPairs(state.gears)) {
+      const source = spins.get(a.id) ? a : (spins.get(b.id) ? b : null)
+      if (!source) continue // stationary meshes are silent
+      const spin = spins.get(source.id)!
+      voices.set(`${[a.id, b.id].sort().join('|')}`, {
+        toothHz: (source.teeth * spin.rpm) / 60,
+        pitchHz: meshPitchHz(Math.min(a.teeth, b.teeth)),
+        gain: Math.min(1, 0.5 + 0.2 * Math.log2(Math.max(1, spin.torqueMultiplier))),
+      })
+    }
+    return voices
+  }, [state.gears, spins])
+
   const selected =
     state.selectedId !== null ? (state.gears.find((g) => g.id === state.selectedId) ?? null) : null
   const driveMissing = state.gears.length > 0 && state.driveId === null
@@ -233,6 +272,7 @@ export function App() {
       } else if (verdict.reason !== 'ok') {
         setPulse({ x: gear.x, y: gear.y, teeth: gear.teeth, reason: verdict.reason, at: Date.now() })
         setLiveRefusal(refusalLabel(verdict.reason))
+        sound().refusal()
       }
     }
     window.addEventListener('keydown', onKey)
@@ -242,12 +282,14 @@ export function App() {
   const onPlace = useCallback(
     (teeth: number, x: number, y: number, partnerId: string | null) => {
       dispatch({ type: 'place', gear: makeGear(crypto.randomUUID(), teeth, x, y), partnerId })
+      if (partnerId) sound().snap()
     },
     [],
   )
   const onMove = useCallback(
     (id: string, x: number, y: number, partnerId: string | null) => {
       dispatch({ type: 'move', id, x, y, partnerId })
+      if (partnerId) sound().snap()
     },
     [],
   )
@@ -293,6 +335,15 @@ export function App() {
 
   const running = state.running
 
+  // Machine sound: one tick-train voice per spinning mesh + the drive hum.
+  useEffect(() => {
+    sound().updateMeshes(meshVoices, running)
+  }, [meshVoices, running])
+
+  useEffect(() => {
+    sound().updateHum(state.driveId && running ? state.rpm : null)
+  }, [state.driveId, state.rpm, running])
+
   // Dev-only test hook (R4): state assertions for e2e without pixel scraping.
   useEffect(() => {
     if (!import.meta.env.DEV) return
@@ -305,6 +356,11 @@ export function App() {
       angles: () => state.angles,
       place: (teeth: number, x: number, y: number) =>
         dispatch({ type: 'place', gear: makeGear(crypto.randomUUID(), teeth, x, y), partnerId: null }),
+      sound: () => ({
+        enabled: engineRef.current?.isEnabled() ?? soundOn,
+        audioState: engineRef.current?.audioState() ?? 'uninitialized',
+        meshVoices: meshVoices.size,
+      }),
     }
   })
 
@@ -328,6 +384,25 @@ export function App() {
       <header className="top-bar">
         <h1>{APP_TITLE}</h1>
         <div className="top-bar-actions">
+          <button
+            type="button"
+            className="icon-button sound-button"
+            onClick={() => setSoundOn((v) => !v)}
+            aria-pressed={soundOn}
+            aria-label={soundOn ? 'Mute machine sound' : 'Unmute machine sound'}
+          >
+            {soundOn ? (
+              <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true">
+                <path d="M4 9.5v5h3.5L12 19V5L7.5 9.5H4z" fill="currentColor" />
+                <path d="M15 9a4.3 4.3 0 0 1 0 6M17.5 6.7a7.6 7.6 0 0 1 0 10.6" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+              </svg>
+            ) : (
+              <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true">
+                <path d="M4 9.5v5h3.5L12 19V5L7.5 9.5H4z" fill="currentColor" />
+                <path d="M15.5 9.5 20.5 14.5M20.5 9.5 15.5 14.5" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+              </svg>
+            )}
+          </button>
           <button
             type="button"
             className="icon-button"
@@ -381,7 +456,10 @@ export function App() {
             onStartMove={onStartMove}
             onDragEnd={() => setDrag(null)}
             pulse={pulse}
-            onRefusal={(reason) => setLiveRefusal(refusalLabel(reason))}
+            onRefusal={(reason) => {
+              setLiveRefusal(refusalLabel(reason))
+              sound().refusal()
+            }}
             ariaLabel={`Gear train canvas. ${state.gears.length} gear${state.gears.length === 1 ? '' : 's'}${state.driveId && running ? `, spinning at ${state.rpm} RPM drive speed` : ''}.`}
           />
           <div className="sr-only" aria-live="polite">
@@ -442,10 +520,12 @@ export function App() {
                   setToast(null)
                 },
               })
+              sound().snap()
             }}
             onClose={() => setSavesOpen(false)}
             onQuota={() => setToast({ message: 'Couldn’t save — browser storage is full.' })}
             onSlotSaved={(index, previous) => {
+              sound().chime()
               if (!previous) return
               setToast({
                 message: `Slot ${index + 1} updated`,

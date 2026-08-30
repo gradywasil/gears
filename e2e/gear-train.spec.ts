@@ -16,6 +16,12 @@ const driveIdOf = (page: Page) =>
   page.evaluate(() => (window as { __gears: { driveId: () => string | null } }).__gears.driveId())
 const runningOf = (page: Page) =>
   page.evaluate(() => (window as { __gears: { running: () => boolean } }).__gears.running())
+const soundOf = (page: Page) =>
+  page.evaluate(() =>
+    (window as {
+      __gears: { sound: () => { enabled: boolean; audioState: string; meshVoices: number } }
+    }).__gears.sound(),
+  )
 
 /** Chip centers for each palette size (viewport coordinates). */
 const CHIPS: Record<number, { x: number; y: number }> = {
@@ -176,6 +182,37 @@ test('keyboard placement works from the tray; Esc closes the saves panel', async
   await expect(page.getByRole('region', { name: 'Saved designs' })).toBeVisible()
   await page.keyboard.press('Escape')
   await expect(page.getByRole('region', { name: 'Saved designs' })).toHaveCount(0)
+})
+
+test('machine sound: voices follow meshes, mute persists', async ({ page }) => {
+  // Keyboard placement is a user gesture — the AudioContext may start.
+  await page.getByRole('button', { name: 'Add 10-tooth gear' }).focus()
+  await page.keyboard.press('Enter')
+  await expect.poll(async () => (await gearsOf(page)).length).toBe(1)
+  await expect.poll(async () => (await soundOf(page)).audioState).toBe('running')
+  // A single gear has no mesh: hum only.
+  expect((await soundOf(page)).meshVoices).toBe(0)
+  expect((await soundOf(page)).enabled).toBe(true)
+
+  // Second gear meshes: one tick-train voice appears. Aim relative to the
+  // first gear's actual (spiral-placed) position, in viewport coordinates.
+  const [g0] = await gearsOf(page)
+  const canvas = await page.evaluate(() => {
+    const r = document.querySelector('.machine-canvas')!.getBoundingClientRect()
+    return { x: r.x, y: r.y }
+  })
+  await dragChipTo(page, 24, { x: canvas.x + g0!.x + 110, y: canvas.y + g0!.y })
+  await expect.poll(async () => (await gearsOf(page)).length).toBe(2)
+  await expect.poll(async () => (await soundOf(page)).meshVoices).toBe(1)
+
+  // Mute toggles and persists across reload.
+  await page.getByRole('button', { name: 'Mute machine sound' }).click()
+  await expect.poll(async () => (await soundOf(page)).enabled).toBe(false)
+  await page.reload()
+  await page.waitForFunction(() => (window as unknown as { __gears?: unknown }).__gears !== undefined)
+  await expect.poll(async () => (await soundOf(page)).enabled).toBe(false)
+  await page.getByRole('button', { name: 'Unmute machine sound' }).click()
+  await expect.poll(async () => (await soundOf(page)).enabled).toBe(true)
 })
 
 test('reduced motion loads the machine paused with a visible run control', async ({

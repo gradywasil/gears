@@ -20,6 +20,12 @@ is real anyway.
   direction, updating as you drag the drive's speed slider (5–120 RPM).
 - **The drive is yours** — the first gear you place drives the machine; make any
   other gear the drive whenever you like.
+- **It sounds like a machine** — synthesized mesh ticks whose rate follows each
+  contact's tooth-pass frequency (the train's ratios become audible: a 10-tooth
+  gear ticks five times a second at 30 RPM, a meshed 72-tooth turns the same
+  contact into a low whir), a drive hum that labors as you throttle up, and
+  quiet mechanical feedback for snaps, refusals, and saves. Zero audio files —
+  all WebAudio. Speaker toggle in the top bar; your choice persists.
 - **Safe to experiment** — undo toasts on every destructive action, arrow-key
   nudging, full keyboard play (Enter places, Space runs/pauses, Esc closes).
 - **Your bench persists** — continuous autosave plus six named design slots,
@@ -80,4 +86,7 @@ once to an offscreen canvas and rotated cheaply every frame, which is why a
   wait a turn or pause to build).
 - **Nothing spins** — every train needs a drive. If you deleted it, select any
   gear and choose *Set as drive*.
+- **No sound?** — browsers only allow audio after your first click or keypress;
+  place or nudge something and the machine starts speaking. The speaker button
+  in the top bar mutes it (and remembers).
 - **Lost work?** — the bench autosaves continuously; check the *Saves* panel.
